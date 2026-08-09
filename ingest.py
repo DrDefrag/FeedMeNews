@@ -47,11 +47,9 @@ CLUSTER_SIMILARITY_THRESHOLD = 0.4
 # Some game-announcement titles are almost entirely boilerplate
 # ("<Game> - Official Release Date Trailer") which previously caused
 # unrelated games to cluster together purely on shared template words.
-# Found empirically on 9 Aug 2026: Crimson Moon, Serious Sam: Shatterverse,
-# and Future Knight (three different games) all merged into one "story"
-# solely because they share "Official Release Date Trailer". Extending
-# the stopword list to cover this class of boilerplate fixed it without
-# breaking genuine multi-source clusters (verified against real data).
+# Extending the stopword list to cover this class of boilerplate fixed it
+# without breaking genuine multi-source clusters (verified against real
+# data, 9 Aug 2026).
 EXTRA_STOPWORDS = {
     "official", "release", "date", "trailer", "reveal", "gameplay",
     "announcement", "announced", "launches", "launch", "coming", "new",
@@ -60,10 +58,14 @@ STOPWORDS = list(ENGLISH_STOP_WORDS.union(EXTRA_STOPWORDS))
 STOPWORDS_SET = set(STOPWORDS)
 
 # Review score lookups (OpenCritic via RapidAPI). Free tier: 25 searches/day,
-# 200 requests/day, non-commercial use only. Each story we enrich uses 2
-# calls (search + game detail), so this cap keeps us comfortably under the
-# search limit even on a busy day.
-MAX_REVIEWS_PER_RUN = 20
+# 200 requests/day, non-commercial use only. Detection (is_review flag) is
+# free and runs every ingestion cycle so review stories move into the
+# Reviews section quickly; the actual OpenCritic query is the part that
+# costs quota, so it runs on its own slower cadence with a tracked daily
+# budget, decided together with the user on 9 Aug 2026 rather than just
+# polling less often overall.
+REVIEW_SCORE_INTERVAL_SECONDS = 3600
+MAX_OPENCRITIC_LOOKUPS_PER_DAY = 20
 
 
 def ensure_schema(conn):
@@ -248,6 +250,20 @@ def cluster_recent_articles(conn):
     conn.commit()
 
 
+def mark_review_stories(conn):
+    """Flag review-titled stories immediately, every cycle - free, no API
+    calls. This is what makes a story show up in the Reviews section
+    quickly; the (quota-limited) score lookup below is a separate, slower
+    step that can catch up later without delaying the story appearing.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE stories SET is_review = TRUE WHERE title ILIKE %s AND is_review = FALSE",
+            ("%review%",),
+        )
+    conn.commit()
+
+
 def extract_game_name(title):
     """Pull a clean game name out of a review-style headline.
 
@@ -280,7 +296,9 @@ def match_is_plausible(query, matched_name):
     (a laptop, not a game) matched to an unrelated game called "Cosmic
     Zephyr DX" purely on fuzzy name similarity. Requiring at least one
     exact shared word (after removing stopwords) catches both without
-    needing a calibrated similarity threshold.
+    needing a calibrated similarity threshold. Known remaining gap: two
+    different real games sharing one generic word (e.g. "Dragon Hopper"
+    vs "Dragon Sinker") can still pass - accepted as a v1 tradeoff.
     """
     def tokens(s):
         return set(re.findall(r"[a-z0-9]+", s.lower()))
@@ -318,20 +336,34 @@ def get_opencritic_game(game_id):
     return resp.json()
 
 
+def opencritic_lookups_today(conn):
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM stories WHERE opencritic_checked_at::date = now()::date"
+        )
+        return cur.fetchone()[0]
+
+
 def enrich_review_scores(conn):
     if not OPENCRITIC_API_KEY:
         print("[skip] OPENCRITIC_API_KEY not set, skipping review score lookup")
+        return
+
+    already_today = opencritic_lookups_today(conn)
+    remaining_budget = MAX_OPENCRITIC_LOOKUPS_PER_DAY - already_today
+    if remaining_budget <= 0:
+        print(f"[skip] review scores: daily budget of {MAX_OPENCRITIC_LOOKUPS_PER_DAY} already used today")
         return
 
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT id, title FROM stories
-            WHERE title ILIKE %s AND opencritic_checked_at IS NULL
+            WHERE is_review = TRUE AND opencritic_checked_at IS NULL
             ORDER BY updated_at DESC
             LIMIT %s
             """,
-            ("%review%", MAX_REVIEWS_PER_RUN),
+            (remaining_budget,),
         )
         rows = cur.fetchall()
 
@@ -345,8 +377,7 @@ def enrich_review_scores(conn):
                     cur.execute(
                         """
                         UPDATE stories
-                        SET is_review = TRUE,
-                            opencritic_score = %s,
+                        SET opencritic_score = %s,
                             opencritic_tier = %s,
                             opencritic_url = %s,
                             opencritic_review_count = %s,
@@ -368,7 +399,7 @@ def enrich_review_scores(conn):
             else:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "UPDATE stories SET is_review = TRUE, opencritic_checked_at = now() WHERE id = %s",
+                        "UPDATE stories SET opencritic_checked_at = now() WHERE id = %s",
                         (story_id,),
                     )
                 conn.commit()
@@ -382,6 +413,7 @@ def enrich_review_scores(conn):
 def main():
     conn = psycopg2.connect(DB_URL)
     ensure_schema(conn)
+    last_review_score_check = None
     while True:
         print(f"--- ingestion run: {datetime.now(timezone.utc).isoformat()} ---")
         run_once(conn)
@@ -391,10 +423,26 @@ def main():
         except Exception as e:
             print(f"[error] clustering: {e}")
         try:
-            enrich_review_scores(conn)
-            print("[ok] review scores")
+            mark_review_stories(conn)
+            print("[ok] review detection")
         except Exception as e:
-            print(f"[error] review scores: {e}")
+            print(f"[error] review detection: {e}")
+
+        now = datetime.now(timezone.utc)
+        due = (
+            last_review_score_check is None
+            or (now - last_review_score_check).total_seconds() >= REVIEW_SCORE_INTERVAL_SECONDS
+        )
+        if due:
+            try:
+                enrich_review_scores(conn)
+                print("[ok] review scores")
+            except Exception as e:
+                print(f"[error] review scores: {e}")
+            last_review_score_check = now
+        else:
+            print("[skip] review scores: not due yet")
+
         time.sleep(900)
 
 
