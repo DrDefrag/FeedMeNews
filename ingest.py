@@ -5,6 +5,8 @@ import requests
 import xml.etree.ElementTree as ET
 import psycopg2
 from datetime import datetime, timezone
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 DB_URL = os.environ["DATABASE_URL"]
 
@@ -32,6 +34,19 @@ ATOM_NS = {"a": "http://www.w3.org/2005/Atom"}
 # don't trip rate limits by hitting it twice in immediate succession.
 REQUEST_DELAY_SECONDS = 5
 
+# Story clustering settings. Tuned empirically against real data on 9 Aug
+# 2026: threshold 0.4 gives ~25 clusters out of ~290 articles, with the
+# large multi-source clusters (4+ outlets on the same real story) coming
+# out clean. Known limitation: very short titles that happen to share one
+# distinctive phrase (e.g. "early access") can occasionally cluster two
+# unrelated stories together. Tightening the time window doesn't fix this
+# specific failure mode (confirmed against a real false-positive case where
+# both articles published under 2 minutes apart) - it's a vocabulary-overlap
+# issue on short text, not a timing issue. Accepted as a known v1 tradeoff;
+# revisit with entity extraction if it turns out to matter in practice.
+CLUSTER_WINDOW_DAYS = 4
+CLUSTER_SIMILARITY_THRESHOLD = 0.4
+
 
 def ensure_schema(conn):
     with conn.cursor() as cur:
@@ -47,6 +62,15 @@ def ensure_schema(conn):
                 fetched_at TIMESTAMPTZ NOT NULL DEFAULT now()
             );
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS stories (
+                id SERIAL PRIMARY KEY,
+                title TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            );
+        """)
+        cur.execute("ALTER TABLE articles ADD COLUMN IF NOT EXISTS story_id INTEGER;")
     conn.commit()
 
 
@@ -119,12 +143,97 @@ def run_once(conn):
         time.sleep(REQUEST_DELAY_SECONDS)
 
 
+def cluster_recent_articles(conn):
+    """Group articles covering the same real-world story together.
+
+    Recomputes clustering from scratch over a rolling time window every
+    run (cheap at our scale: low hundreds of rows). To keep story_id
+    values stable across runs rather than reshuffling every time, any
+    cluster that already has one or more story_id values assigned keeps
+    the smallest (earliest-created) one as canonical, and every member of
+    that cluster gets updated to match it.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, title, story_id
+            FROM articles
+            WHERE COALESCE(published_at, fetched_at) > now() - interval '%s days'
+            """
+            % CLUSTER_WINDOW_DAYS
+        )
+        rows = cur.fetchall()
+
+    if len(rows) < 2:
+        return
+
+    ids = [r[0] for r in rows]
+    titles = [r[1] for r in rows]
+    existing_story_ids = [r[2] for r in rows]
+
+    vectorizer = TfidfVectorizer(stop_words="english")
+    matrix = vectorizer.fit_transform(titles)
+    similarity = cosine_similarity(matrix)
+
+    n = len(titles)
+    parent = list(range(n))
+
+    def find(x):
+        while parent[x] != x:
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if similarity[i][j] >= CLUSTER_SIMILARITY_THRESHOLD:
+                union(i, j)
+
+    groups = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(i)
+
+    for members in groups.values():
+        known_ids = {existing_story_ids[i] for i in members if existing_story_ids[i] is not None}
+        if known_ids:
+            canonical_story_id = min(known_ids)
+        else:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO stories (title) VALUES (%s) RETURNING id",
+                    (titles[members[0]],),
+                )
+                canonical_story_id = cur.fetchone()[0]
+
+        with conn.cursor() as cur:
+            for i in members:
+                if existing_story_ids[i] != canonical_story_id:
+                    cur.execute(
+                        "UPDATE articles SET story_id = %s WHERE id = %s",
+                        (canonical_story_id, ids[i]),
+                    )
+            cur.execute(
+                "UPDATE stories SET updated_at = now() WHERE id = %s",
+                (canonical_story_id,),
+            )
+    conn.commit()
+
+
 def main():
     conn = psycopg2.connect(DB_URL)
     ensure_schema(conn)
     while True:
         print(f"--- ingestion run: {datetime.now(timezone.utc).isoformat()} ---")
         run_once(conn)
+        try:
+            cluster_recent_articles(conn)
+            print("[ok] clustering")
+        except Exception as e:
+            print(f"[error] clustering: {e}")
         time.sleep(900)
 
 
