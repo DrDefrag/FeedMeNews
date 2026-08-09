@@ -5,7 +5,7 @@ import requests
 import xml.etree.ElementTree as ET
 import psycopg2
 from datetime import datetime, timezone
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer, ENGLISH_STOP_WORDS
 from sklearn.metrics.pairwise import cosine_similarity
 
 DB_URL = os.environ["DATABASE_URL"]
@@ -46,6 +46,20 @@ REQUEST_DELAY_SECONDS = 5
 # revisit with entity extraction if it turns out to matter in practice.
 CLUSTER_WINDOW_DAYS = 4
 CLUSTER_SIMILARITY_THRESHOLD = 0.4
+
+# Some game-announcement titles are almost entirely boilerplate
+# ("<Game> - Official Release Date Trailer") which previously caused
+# unrelated games to cluster together purely on shared template words.
+# Found empirically on 9 Aug 2026: Crimson Moon, Serious Sam: Shatterverse,
+# and Future Knight (three different games) all merged into one "story"
+# solely because they share "Official Release Date Trailer". Extending
+# the stopword list to cover this class of boilerplate fixed it without
+# breaking genuine multi-source clusters (verified against real data).
+EXTRA_STOPWORDS = {
+        "official", "release", "date", "trailer", "reveal", "gameplay",
+        "announcement", "announced", "launches", "launch", "coming", "new",
+}
+STOPWORDS = list(ENGLISH_STOP_WORDS.union(EXTRA_STOPWORDS))
 
 
 def ensure_schema(conn):
@@ -171,7 +185,7 @@ def cluster_recent_articles(conn):
     titles = [r[1] for r in rows]
     existing_story_ids = [r[2] for r in rows]
 
-    vectorizer = TfidfVectorizer(stop_words="english")
+    vectorizer = TfidfVectorizer(stop_words=STOPWORDS)
     matrix = vectorizer.fit_transform(titles)
     similarity = cosine_similarity(matrix)
 
