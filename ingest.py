@@ -12,7 +12,12 @@ RSS_SOURCES = [
     {"name": "IGN", "tier": "trusted", "url": "https://www.ign.com/rss/articles/feed?tags=games"},
     {"name": "Polygon", "tier": "trusted", "url": "https://www.polygon.com/feed/"},
     {"name": "PC Gamer", "tier": "trusted", "url": "https://www.pcgamer.com/rss/"},
+    {"name": "Eurogamer", "tier": "trusted", "url": "https://www.eurogamer.net/feed"},
+    {"name": "GameSpot", "tier": "trusted", "url": "https://www.gamespot.com/feeds/game-news/"},
+    {"name": "GamesRadar", "tier": "trusted", "url": "https://www.gamesradar.com/rss/"},
     {"name": "Rock Paper Shotgun", "tier": "niche", "url": "https://www.rockpapershotgun.com/feed"},
+    {"name": "NintendoLife", "tier": "niche", "url": "https://www.nintendolife.com/feeds/latest"},
+    {"name": "VG247", "tier": "niche", "url": "https://www.vg247.com/feed"},
 ]
 
 REDDIT_SOURCES = [
