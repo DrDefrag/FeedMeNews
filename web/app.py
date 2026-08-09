@@ -3,7 +3,7 @@ import re
 import datetime
 import psycopg2
 import psycopg2.extras
-from flask import Flask, render_template_string
+from flask import Flask, render_template_string, request
 
 app = Flask(__name__)
 DB_URL = os.environ["DATABASE_URL"]
@@ -18,9 +18,9 @@ CSS = """
 --trust: #378ADD;
 --trust-bg: #E6F1FB;
 --trust-fg: #0C447C;
---niche: #7F77DD;
---niche-bg: #EEEDFE;
---niche-fg: #3C3489;
+--niche: #D4537E;
+--niche-bg: #FBEAF0;
+--niche-fg: #72243E;
 --comm: #D85A30;
 --comm-bg: #FAECE7;
 --comm-fg: #712B13;
@@ -42,8 +42,8 @@ CSS = """
 --text-secondary: #9a9890;
 --trust-bg: #0C447C;
 --trust-fg: #B5D4F4;
---niche-bg: #3C3489;
---niche-fg: #CECBF6;
+--niche-bg: #72243E;
+--niche-fg: #ED93B1;
 --comm-bg: #712B13;
 --comm-fg: #F5C4B3;
 --mighty-bg: #27500A;
@@ -82,7 +82,7 @@ margin: 0;
 .tabs {
 display: flex;
 gap: 4px;
-padding: 4px 16px 14px;
+padding: 4px 16px 0;
 max-width: 640px;
 margin: 0 auto;
 border-bottom: 1px solid var(--border);
@@ -101,12 +101,28 @@ border: 1px solid var(--border);
 border-bottom-color: var(--card);
 margin-bottom: -1px;
 }
+.sort-row {
+display: flex;
+gap: 16px;
+padding: 12px 16px;
+max-width: 640px;
+margin: 0 auto;
+}
+.sort-link {
+font-size: 13px;
+color: var(--text-secondary);
+}
+.sort-link.active {
+color: var(--text);
+font-weight: 600;
+text-decoration: underline;
+}
 .legend {
 display: flex;
 gap: 14px;
 font-size: 12px;
 color: var(--text-secondary);
-padding: 14px 16px 14px;
+padding: 0 16px 14px;
 max-width: 640px;
 margin: 0 auto;
 }
@@ -126,6 +142,10 @@ border: 1px solid var(--border);
 border-radius: 14px;
 padding: 16px;
 margin-bottom: 14px;
+transition: opacity 0.15s ease;
+}
+.card.read {
+opacity: 0.5;
 }
 .card h2 {
 font-size: 16px;
@@ -246,6 +266,24 @@ letter-spacing: 0.04em;
 }
 """
 
+READ_TRACKER_JS = """
+<script>
+(function () {
+  var KEY = "feedmenews_read";
+  var read;
+  try { read = JSON.parse(localStorage.getItem(KEY) || "[]"); } catch (e) { read = []; }
+  var set = {};
+  for (var i = 0; i < read.length; i++) { set[String(read[i])] = true; }
+  var cards = document.querySelectorAll(".card[data-story-id]");
+  for (var j = 0; j < cards.length; j++) {
+    if (set[cards[j].getAttribute("data-story-id")]) {
+      cards[j].classList.add("read");
+    }
+  }
+})();
+</script>
+"""
+
 FEED_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
@@ -263,6 +301,10 @@ FEED_TEMPLATE = """<!doctype html>
 <a href="/" class="tab {{ 'active' if active_tab == 'main' else '' }}">Main</a>
 <a href="/reviews" class="tab {{ 'active' if active_tab == 'reviews' else '' }}">Reviews</a>
 </div>
+<div class="sort-row">
+<a href="{{ base_path }}" class="sort-link {{ 'active' if sort == 'covered' else '' }}">Most covered</a>
+<a href="{{ base_path }}?sort=recent" class="sort-link {{ 'active' if sort == 'recent' else '' }}">Most recent</a>
+</div>
 <div class="legend">
 <span><span class="dot" style="background:var(--trust)"></span>Trusted</span>
 <span><span class="dot" style="background:var(--niche)"></span>Niche</span>
@@ -270,7 +312,7 @@ FEED_TEMPLATE = """<!doctype html>
 </div>
 <main>
 {% for story in stories %}
-<a class="card" href="/story/{{ story.id }}">
+<a class="card" data-story-id="{{ story.id }}" href="/story/{{ story.id }}">
 {% if story.opencritic_score and story.opencritic_score > 0 %}
 <span class="score-chip" style="background:var(--{{ (story.opencritic_tier or 'strong')|lower }}-bg); color:var(--{{ (story.opencritic_tier or 'strong')|lower }}-fg);">{{ story.opencritic_score|round|int }}{% if story.opencritic_tier %} &middot; {{ story.opencritic_tier }}{% endif %}</span><br>
 {% endif %}
@@ -292,6 +334,7 @@ FEED_TEMPLATE = """<!doctype html>
 <p class="meta">Nothing here yet.</p>
 {% endif %}
 </main>
+""" + READ_TRACKER_JS + """
 </body>
 </html>"""
 
@@ -334,6 +377,18 @@ STORY_TEMPLATE = """<!doctype html>
 </a>
 {% endfor %}
 </main>
+<script>
+(function () {
+  var KEY = "feedmenews_read";
+  var read;
+  try { read = JSON.parse(localStorage.getItem(KEY) || "[]"); } catch (e) { read = []; }
+  var id = String({{ story.id }});
+  if (read.indexOf(id) === -1 && read.indexOf({{ story.id }}) === -1) {
+    read.push(id);
+    try { localStorage.setItem(KEY, JSON.stringify(read)); } catch (e) {}
+  }
+})();
+</script>
 </body>
 </html>"""
 
@@ -352,11 +407,12 @@ def strip_html(text):
     return text
 
 
-def fetch_stories(is_review):
+def fetch_stories(is_review, sort):
+    order_by = "latest DESC" if sort == "recent" else "n DESC, latest DESC"
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
-        """
+        f"""
         SELECT
             s.id,
             s.title,
@@ -371,7 +427,7 @@ def fetch_stories(is_review):
         JOIN articles a ON a.story_id = s.id
         WHERE s.is_review = %s
         GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier
-        ORDER BY n DESC, latest DESC
+        ORDER BY {order_by}
         LIMIT 30
         """,
         (is_review,),
@@ -408,19 +464,28 @@ def fetch_stories(is_review):
     return stories, source_count
 
 
+def valid_sort():
+    s = request.args.get("sort", "covered")
+    return s if s in ("covered", "recent") else "covered"
+
+
 @app.route("/")
 def index():
-    stories, source_count = fetch_stories(is_review=False)
+    sort = valid_sort()
+    stories, source_count = fetch_stories(is_review=False, sort=sort)
     return render_template_string(
-        FEED_TEMPLATE, stories=stories, source_count=source_count, active_tab="main"
+        FEED_TEMPLATE, stories=stories, source_count=source_count,
+        active_tab="main", base_path="/", sort=sort,
     )
 
 
 @app.route("/reviews")
 def reviews():
-    stories, source_count = fetch_stories(is_review=True)
+    sort = valid_sort()
+    stories, source_count = fetch_stories(is_review=True, sort=sort)
     return render_template_string(
-        FEED_TEMPLATE, stories=stories, source_count=source_count, active_tab="reviews"
+        FEED_TEMPLATE, stories=stories, source_count=source_count,
+        active_tab="reviews", base_path="/reviews", sort=sort,
     )
 
 
