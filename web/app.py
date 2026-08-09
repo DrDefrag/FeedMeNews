@@ -179,7 +179,7 @@ def index():
         FROM stories s
         JOIN articles a ON a.story_id = s.id
         GROUP BY s.id, s.title
-        ORDER BY latest DESC
+        ORDER BY n DESC, latest DESC
         LIMIT 30
     """)
     story_rows = cur.fetchall()
