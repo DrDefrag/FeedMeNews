@@ -57,6 +57,7 @@ EXTRA_STOPWORDS = {
     "announcement", "announced", "launches", "launch", "coming", "new",
 }
 STOPWORDS = list(ENGLISH_STOP_WORDS.union(EXTRA_STOPWORDS))
+STOPWORDS_SET = set(STOPWORDS)
 
 # Review score lookups (OpenCritic via RapidAPI). Free tier: 25 searches/day,
 # 200 requests/day, non-commercial use only. Each story we enrich uses 2
@@ -129,7 +130,7 @@ def fetch_reddit(conn, source):
     # datacenter/hosting IP ranges, but its older .rss (Atom) endpoint is
     # not subject to the same block, just normal rate limits. We parse it
     # directly with ElementTree since feedparser doesn't reliably detect
-    # entries in this particular feed variant.
+    # entries in this particular Atom feed variant.
     resp = requests.get(source["url"], headers=HEADERS, timeout=15)
     resp.raise_for_status()
     root = ET.fromstring(resp.content)
@@ -250,22 +251,43 @@ def cluster_recent_articles(conn):
 def extract_game_name(title):
     """Pull a clean game name out of a review-style headline.
 
-    Handles both "Review: Game Name - subtitle" and "Game Name review:
-    subtitle" phrasing. Imperfect on purpose for now - simple heuristic,
-    fix specific failures as we see them against real titles rather than
-    trying to handle every possible phrasing upfront.
+    Handles "Review: Game Name - subtitle", "Game Name Review: subtitle",
+    and "<word> Review: Game Name" (e.g. "Mini Review: Dragon House").
+    Imperfect on purpose - simple heuristic, backed up by
+    match_is_plausible() below so a bad extraction produces no result
+    rather than a wrong one.
     """
     t = title.strip()
-    m = re.match(r"^review\s*[:\-\u2013\u2014]\s*(.+)$", t, re.IGNORECASE)
+    m = re.match(r"^(?:\w+\s+)?review\s*[:\-\u2013\u2014]\s*(.+)$", t, re.IGNORECASE)
     if m:
         candidate = m.group(1)
     else:
-        parts = re.split(r"\breview\b", t, maxsplit=1, flags=re.IGNORECASE)
+        parts = re.split(r"\breview(?:s)?\b", t, maxsplit=1, flags=re.IGNORECASE)
         candidate = parts[0] if parts else t
     candidate = re.sub(r"^(our|the)\s+", "", candidate, flags=re.IGNORECASE)
     candidate = re.split(r"\s[\-\u2013\u2014:]\s", candidate)[0]
+    candidate = re.sub(r"\s*\([^)]*\)\s*$", "", candidate)
     candidate = candidate.strip(" -\u2013\u2014:,.'\"")
     return candidate
+
+
+def match_is_plausible(query, matched_name):
+    """Reject a search match that shares no real word with the query.
+
+    Found empirically on 9 Aug 2026: without this check, "Mini Review:
+    Dragon House..." matched to the unrelated game "Minit" (similar
+    string, zero shared words), and "Asus ROG Zephyrus G16 (2026) review"
+    (a laptop, not a game) matched to an unrelated game called "Cosmic
+    Zephyr DX" purely on fuzzy name similarity. Requiring at least one
+    exact shared word (after removing stopwords) catches both without
+    needing a calibrated similarity threshold.
+    """
+    def tokens(s):
+        return set(re.findall(r"[a-z0-9]+", s.lower()))
+
+    query_tokens = tokens(query) - STOPWORDS_SET
+    name_tokens = tokens(matched_name)
+    return bool(query_tokens and (query_tokens & name_tokens))
 
 
 def search_opencritic(name):
@@ -317,7 +339,7 @@ def enrich_review_scores(conn):
         game_name = extract_game_name(title)
         try:
             match = search_opencritic(game_name) if game_name else None
-            if match:
+            if match and match_is_plausible(game_name, match["name"]):
                 detail = get_opencritic_game(match["id"])
                 with conn.cursor() as cur:
                     cur.execute(
@@ -350,7 +372,8 @@ def enrich_review_scores(conn):
                         (story_id,),
                     )
                 conn.commit()
-                print(f"[no match] review score: {title!r} (searched {game_name!r})")
+                reason = "no search result" if not match else f"implausible match {match['name']!r}"
+                print(f"[no match] review score: {title!r} (searched {game_name!r}, {reason})")
         except Exception as e:
             print(f"[error] review score for {title!r}: {e}")
         time.sleep(REQUEST_DELAY_SECONDS)
