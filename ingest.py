@@ -2,6 +2,7 @@ import os
 import time
 import feedparser
 import requests
+import xml.etree.ElementTree as ET
 import psycopg2
 from datetime import datetime, timezone
 
@@ -15,11 +16,12 @@ RSS_SOURCES = [
 ]
 
 REDDIT_SOURCES = [
-    {"name": "r/Games", "tier": "community", "url": "https://www.reddit.com/r/Games/.json?limit=25"},
-    {"name": "r/pcgaming", "tier": "community", "url": "https://www.reddit.com/r/pcgaming/.json?limit=25"},
+    {"name": "r/Games", "tier": "community", "url": "https://www.reddit.com/r/Games/.rss"},
+    {"name": "r/pcgaming", "tier": "community", "url": "https://www.reddit.com/r/pcgaming/.rss"},
 ]
 
 HEADERS = {"User-Agent": "gaming-news-aggregator/0.1 (personal project)"}
+ATOM_NS = {"a": "http://www.w3.org/2005/Atom"}
 
 
 def ensure_schema(conn):
@@ -68,17 +70,21 @@ def fetch_rss(conn, source):
 def fetch_reddit(conn, source):
     resp = requests.get(source["url"], headers=HEADERS, timeout=15)
     resp.raise_for_status()
-    data = resp.json()
-    for child in data.get("data", {}).get("children", []):
-        post = child.get("data", {})
-        title = post.get("title", "").strip()
-        permalink = post.get("permalink", "")
-        url = f"https://www.reddit.com{permalink}" if permalink else post.get("url", "")
-        summary = (post.get("selftext", "") or "")[:400]
-        created = post.get("created_utc")
-        published = datetime.fromtimestamp(created, tz=timezone.utc) if created else None
+    root = ET.fromstring(resp.content)
+    for entry in root.findall("a:entry", ATOM_NS):
+        title_el = entry.find("a:title", ATOM_NS)
+        link_el = entry.find("a:link", ATOM_NS)
+        updated_el = entry.find("a:updated", ATOM_NS)
+        title = (title_el.text or "").strip() if title_el is not None else ""
+        url = link_el.get("href") if link_el is not None else ""
+        published = None
+        if updated_el is not None and updated_el.text:
+            try:
+                published = datetime.fromisoformat(updated_el.text)
+            except ValueError:
+                published = None
         if title and url:
-            upsert_article(conn, source["name"], source["tier"], title, url, summary, published)
+            upsert_article(conn, source["name"], source["tier"], title, url, "", published)
 
 
 def run_once(conn):
@@ -103,7 +109,7 @@ def main():
     while True:
         print(f"--- ingestion run: {datetime.now(timezone.utc).isoformat()} ---")
         run_once(conn)
-        time.sleep(900)  # 15 minutes
+        time.sleep(900)
 
 
 if __name__ == "__main__":
