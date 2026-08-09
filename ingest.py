@@ -23,6 +23,10 @@ REDDIT_SOURCES = [
 HEADERS = {"User-Agent": "gaming-news-aggregator/0.1 (personal project)"}
 ATOM_NS = {"a": "http://www.w3.org/2005/Atom"}
 
+# Small pause between requests to the same host (Reddit especially) so we
+# don't trip rate limits by hitting it twice in immediate succession.
+REQUEST_DELAY_SECONDS = 5
+
 
 def ensure_schema(conn):
     with conn.cursor() as cur:
@@ -68,6 +72,11 @@ def fetch_rss(conn, source):
 
 
 def fetch_reddit(conn, source):
+    # Reddit blocks anonymous requests to its .json endpoints from most
+    # datacenter/hosting IP ranges, but its older .rss (Atom) endpoint is
+    # not subject to the same block, just normal rate limits. We parse it
+    # directly with ElementTree since feedparser doesn't reliably detect
+    # entries in this particular feed variant.
     resp = requests.get(source["url"], headers=HEADERS, timeout=15)
     resp.raise_for_status()
     root = ET.fromstring(resp.content)
@@ -94,6 +103,7 @@ def run_once(conn):
             print(f"[ok] {source['name']}")
         except Exception as e:
             print(f"[error] {source['name']}: {e}")
+        time.sleep(REQUEST_DELAY_SECONDS)
 
     for source in REDDIT_SOURCES:
         try:
@@ -101,6 +111,7 @@ def run_once(conn):
             print(f"[ok] {source['name']}")
         except Exception as e:
             print(f"[error] {source['name']}: {e}")
+        time.sleep(REQUEST_DELAY_SECONDS)
 
 
 def main():
