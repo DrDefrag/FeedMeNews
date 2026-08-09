@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import feedparser
 import requests
@@ -9,6 +10,8 @@ from sklearn.feature_extraction.text import TfidfVectorizer, ENGLISH_STOP_WORDS
 from sklearn.metrics.pairwise import cosine_similarity
 
 DB_URL = os.environ["DATABASE_URL"]
+OPENCRITIC_API_KEY = os.environ.get("OPENCRITIC_API_KEY")
+OPENCRITIC_HOST = "opencritic-api.p.rapidapi.com"
 
 RSS_SOURCES = [
     {"name": "IGN", "tier": "trusted", "url": "https://www.ign.com/rss/articles/feed?tags=games"},
@@ -37,13 +40,7 @@ REQUEST_DELAY_SECONDS = 5
 # Story clustering settings. Tuned empirically against real data on 9 Aug
 # 2026: threshold 0.4 gives ~25 clusters out of ~290 articles, with the
 # large multi-source clusters (4+ outlets on the same real story) coming
-# out clean. Known limitation: very short titles that happen to share one
-# distinctive phrase (e.g. "early access") can occasionally cluster two
-# unrelated stories together. Tightening the time window doesn't fix this
-# specific failure mode (confirmed against a real false-positive case where
-# both articles published under 2 minutes apart) - it's a vocabulary-overlap
-# issue on short text, not a timing issue. Accepted as a known v1 tradeoff;
-# revisit with entity extraction if it turns out to matter in practice.
+# out clean.
 CLUSTER_WINDOW_DAYS = 4
 CLUSTER_SIMILARITY_THRESHOLD = 0.4
 
@@ -56,10 +53,16 @@ CLUSTER_SIMILARITY_THRESHOLD = 0.4
 # the stopword list to cover this class of boilerplate fixed it without
 # breaking genuine multi-source clusters (verified against real data).
 EXTRA_STOPWORDS = {
-        "official", "release", "date", "trailer", "reveal", "gameplay",
-        "announcement", "announced", "launches", "launch", "coming", "new",
+    "official", "release", "date", "trailer", "reveal", "gameplay",
+    "announcement", "announced", "launches", "launch", "coming", "new",
 }
 STOPWORDS = list(ENGLISH_STOP_WORDS.union(EXTRA_STOPWORDS))
+
+# Review score lookups (OpenCritic via RapidAPI). Free tier: 25 searches/day,
+# 200 requests/day, non-commercial use only. Each story we enrich uses 2
+# calls (search + game detail), so this cap keeps us comfortably under the
+# search limit even on a busy day.
+MAX_REVIEWS_PER_RUN = 20
 
 
 def ensure_schema(conn):
@@ -85,6 +88,13 @@ def ensure_schema(conn):
             );
         """)
         cur.execute("ALTER TABLE articles ADD COLUMN IF NOT EXISTS story_id INTEGER;")
+        cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS is_review BOOLEAN NOT NULL DEFAULT FALSE;")
+        cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS opencritic_score REAL;")
+        cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS opencritic_tier TEXT;")
+        cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS opencritic_url TEXT;")
+        cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS opencritic_review_count INTEGER;")
+        cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS opencritic_game_name TEXT;")
+        cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS opencritic_checked_at TIMESTAMPTZ;")
     conn.commit()
 
 
@@ -237,6 +247,115 @@ def cluster_recent_articles(conn):
     conn.commit()
 
 
+def extract_game_name(title):
+    """Pull a clean game name out of a review-style headline.
+
+    Handles both "Review: Game Name - subtitle" and "Game Name review:
+    subtitle" phrasing. Imperfect on purpose for now - simple heuristic,
+    fix specific failures as we see them against real titles rather than
+    trying to handle every possible phrasing upfront.
+    """
+    t = title.strip()
+    m = re.match(r"^review\s*[:\-\u2013\u2014]\s*(.+)$", t, re.IGNORECASE)
+    if m:
+        candidate = m.group(1)
+    else:
+        parts = re.split(r"\breview\b", t, maxsplit=1, flags=re.IGNORECASE)
+        candidate = parts[0] if parts else t
+    candidate = re.sub(r"^(our|the)\s+", "", candidate, flags=re.IGNORECASE)
+    candidate = re.split(r"\s[\-\u2013\u2014:]\s", candidate)[0]
+    candidate = candidate.strip(" -\u2013\u2014:,.'\"")
+    return candidate
+
+
+def search_opencritic(name):
+    resp = requests.get(
+        f"https://{OPENCRITIC_HOST}/game/search",
+        params={"criteria": name},
+        headers={
+            "x-rapidapi-host": OPENCRITIC_HOST,
+            "x-rapidapi-key": OPENCRITIC_API_KEY,
+        },
+        timeout=15,
+    )
+    resp.raise_for_status()
+    results = resp.json()
+    return results[0] if results else None
+
+
+def get_opencritic_game(game_id):
+    resp = requests.get(
+        f"https://{OPENCRITIC_HOST}/game/{game_id}",
+        headers={
+            "x-rapidapi-host": OPENCRITIC_HOST,
+            "x-rapidapi-key": OPENCRITIC_API_KEY,
+        },
+        timeout=15,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def enrich_review_scores(conn):
+    if not OPENCRITIC_API_KEY:
+        print("[skip] OPENCRITIC_API_KEY not set, skipping review score lookup")
+        return
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, title FROM stories
+            WHERE title ILIKE %s AND opencritic_checked_at IS NULL
+            ORDER BY updated_at DESC
+            LIMIT %s
+            """,
+            ("%review%", MAX_REVIEWS_PER_RUN),
+        )
+        rows = cur.fetchall()
+
+    for story_id, title in rows:
+        game_name = extract_game_name(title)
+        try:
+            match = search_opencritic(game_name) if game_name else None
+            if match:
+                detail = get_opencritic_game(match["id"])
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE stories
+                        SET is_review = TRUE,
+                            opencritic_score = %s,
+                            opencritic_tier = %s,
+                            opencritic_url = %s,
+                            opencritic_review_count = %s,
+                            opencritic_game_name = %s,
+                            opencritic_checked_at = now()
+                        WHERE id = %s
+                        """,
+                        (
+                            detail.get("topCriticScore"),
+                            detail.get("tier"),
+                            detail.get("url"),
+                            detail.get("numReviews"),
+                            detail.get("name"),
+                            story_id,
+                        ),
+                    )
+                conn.commit()
+                print(f"[ok] review score: {title!r} -> {detail.get('name')} ({detail.get('tier')})")
+            else:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE stories SET is_review = TRUE, opencritic_checked_at = now() WHERE id = %s",
+                        (story_id,),
+                    )
+                conn.commit()
+                print(f"[no match] review score: {title!r} (searched {game_name!r})")
+        except Exception as e:
+            print(f"[error] review score for {title!r}: {e}")
+        time.sleep(REQUEST_DELAY_SECONDS)
+
+
 def main():
     conn = psycopg2.connect(DB_URL)
     ensure_schema(conn)
@@ -248,6 +367,11 @@ def main():
             print("[ok] clustering")
         except Exception as e:
             print(f"[error] clustering: {e}")
+        try:
+            enrich_review_scores(conn)
+            print("[ok] review scores")
+        except Exception as e:
+            print(f"[error] review scores: {e}")
         time.sleep(900)
 
 
