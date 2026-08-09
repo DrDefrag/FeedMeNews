@@ -271,7 +271,7 @@ FEED_TEMPLATE = """<!doctype html>
 <main>
 {% for story in stories %}
 <a class="card" href="/story/{{ story.id }}">
-{% if story.opencritic_score %}
+{% if story.opencritic_score and story.opencritic_score > 0 %}
 <span class="score-chip" style="background:var(--{{ (story.opencritic_tier or 'strong')|lower }}-bg); color:var(--{{ (story.opencritic_tier or 'strong')|lower }}-fg);">{{ story.opencritic_score|round|int }}{% if story.opencritic_tier %} &middot; {{ story.opencritic_tier }}{% endif %}</span><br>
 {% endif %}
 <h2>{{ story.title }}</h2>
@@ -313,7 +313,7 @@ STORY_TEMPLATE = """<!doctype html>
 {% if niche_n %}<div style="flex:{{ niche_n }};background:var(--niche);"></div>{% endif %}
 {% if community_n %}<div style="flex:{{ community_n }};background:var(--comm);"></div>{% endif %}
 </div>
-{% if story.opencritic_score %}
+{% if story.opencritic_score and story.opencritic_score > 0 %}
 <div class="score-block">
 <div class="score-circle" style="background:var(--{{ (story.opencritic_tier or 'strong')|lower }}-bg); color:var(--{{ (story.opencritic_tier or 'strong')|lower }}-fg);">{{ story.opencritic_score|round|int }}</div>
 <div>
