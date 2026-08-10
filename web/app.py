@@ -3,7 +3,7 @@ import re
 import datetime
 import psycopg2
 import psycopg2.extras
-from flask import Flask, render_template_string, request
+from flask import Flask, render_template_string, request, jsonify
 
 app = Flask(__name__)
 DB_URL = os.environ["DATABASE_URL"]
@@ -101,18 +101,18 @@ border: 1px solid var(--border);
 border-bottom-color: var(--card);
 margin-bottom: -1px;
 }
-.sort-row {
+.view-row {
 display: flex;
 gap: 16px;
 padding: 12px 16px;
 max-width: 640px;
 margin: 0 auto;
 }
-.sort-link {
+.view-link {
 font-size: 13px;
 color: var(--text-secondary);
 }
-.sort-link.active {
+.view-link.active {
 color: var(--text);
 font-weight: 600;
 text-decoration: underline;
@@ -136,16 +136,39 @@ margin: 0 auto;
 padding: 0 16px 40px;
 }
 .card {
+position: relative;
 display: block;
 background: var(--card);
 border: 1px solid var(--border);
 border-radius: 14px;
 padding: 16px;
 margin-bottom: 14px;
-transition: opacity 0.15s ease;
+transition: opacity 0.2s ease, transform 0.2s ease;
 }
-.card.read {
-opacity: 0.5;
+.card-link {
+display: block;
+}
+.card-link.with-discard {
+padding-top: 28px;
+}
+.discard-btn {
+position: absolute;
+top: 12px;
+left: 12px;
+width: 28px;
+height: 28px;
+border-radius: 50%;
+border: none;
+background: var(--border);
+color: var(--text-secondary);
+font-size: 16px;
+line-height: 1;
+display: flex;
+align-items: center;
+justify-content: center;
+cursor: pointer;
+z-index: 2;
+padding: 0;
 }
 .card h2 {
 font-size: 16px;
@@ -266,21 +289,23 @@ letter-spacing: 0.04em;
 }
 """
 
-READ_TRACKER_JS = """
+DISCARD_JS = """
 <script>
-(function () {
-  var KEY = "feedmenews_read";
-  var read;
-  try { read = JSON.parse(localStorage.getItem(KEY) || "[]"); } catch (e) { read = []; }
-  var set = {};
-  for (var i = 0; i < read.length; i++) { set[String(read[i])] = true; }
-  var cards = document.querySelectorAll(".card[data-story-id]");
-  for (var j = 0; j < cards.length; j++) {
-    if (set[cards[j].getAttribute("data-story-id")]) {
-      cards[j].classList.add("read");
+document.addEventListener("click", function (e) {
+  var btn = e.target.closest(".discard-btn");
+  if (!btn) return;
+  e.preventDefault();
+  e.stopPropagation();
+  var id = btn.getAttribute("data-discard-id");
+  var card = btn.closest(".card");
+  fetch("/story/" + id + "/discard", { method: "POST" }).then(function (r) {
+    if (r.ok && card) {
+      card.style.opacity = "0";
+      card.style.transform = "scale(0.96)";
+      setTimeout(function () { card.remove(); }, 200);
     }
-  }
-})();
+  });
+});
 </script>
 """
 
@@ -301,9 +326,10 @@ FEED_TEMPLATE = """<!doctype html>
 <a href="/" class="tab {{ 'active' if active_tab == 'main' else '' }}">Main</a>
 <a href="/reviews" class="tab {{ 'active' if active_tab == 'reviews' else '' }}">Reviews</a>
 </div>
-<div class="sort-row">
-<a href="{{ base_path }}" class="sort-link {{ 'active' if sort == 'covered' else '' }}">Most covered</a>
-<a href="{{ base_path }}?sort=recent" class="sort-link {{ 'active' if sort == 'recent' else '' }}">Most recent</a>
+<div class="view-row">
+<a href="{{ base_path }}" class="view-link {{ 'active' if view == 'recent' else '' }}">Most recent</a>
+<a href="{{ base_path }}?view=covered" class="view-link {{ 'active' if view == 'covered' else '' }}">Most covered</a>
+<a href="{{ base_path }}?view=read" class="view-link {{ 'active' if view == 'read' else '' }}">Read</a>
 </div>
 <div class="legend">
 <span><span class="dot" style="background:var(--trust)"></span>Trusted</span>
@@ -312,7 +338,25 @@ FEED_TEMPLATE = """<!doctype html>
 </div>
 <main>
 {% for story in stories %}
-<a class="card" data-story-id="{{ story.id }}" href="/story/{{ story.id }}">
+{% if view == 'read' %}
+<a class="card" href="/story/{{ story.id }}">
+<h2>{{ story.title }}</h2>
+<p class="meta">{{ story.n }} source{{ 's' if story.n != 1 else '' }} &middot; {{ 'Discarded' if story.was_discarded_only else 'Read' }} {{ story.interaction_ago }}</p>
+<div class="bar">
+{% if story.trusted_n %}<div style="flex:{{ story.trusted_n }};background:var(--trust);"></div>{% endif %}
+{% if story.niche_n %}<div style="flex:{{ story.niche_n }};background:var(--niche);"></div>{% endif %}
+{% if story.community_n %}<div style="flex:{{ story.community_n }};background:var(--comm);"></div>{% endif %}
+</div>
+<div class="chips">
+{% for src, tier in story.sources %}
+<span class="chip" style="background:var(--{{ tier }}-bg); color:var(--{{ tier }}-fg);">{{ src }}</span>
+{% endfor %}
+</div>
+</a>
+{% else %}
+<div class="card">
+<button class="discard-btn" data-discard-id="{{ story.id }}" aria-label="Discard">&times;</button>
+<a class="card-link with-discard" href="/story/{{ story.id }}">
 {% if story.opencritic_score and story.opencritic_score > 0 %}
 <span class="score-chip" style="background:var(--{{ (story.opencritic_tier or 'strong')|lower }}-bg); color:var(--{{ (story.opencritic_tier or 'strong')|lower }}-fg);">{{ story.opencritic_score|round|int }}{% if story.opencritic_tier %} &middot; {{ story.opencritic_tier }}{% endif %}</span><br>
 {% endif %}
@@ -329,12 +373,14 @@ FEED_TEMPLATE = """<!doctype html>
 {% endfor %}
 </div>
 </a>
+</div>
+{% endif %}
 {% endfor %}
 {% if not stories %}
 <p class="meta">Nothing here yet.</p>
 {% endif %}
 </main>
-""" + READ_TRACKER_JS + """
+""" + DISCARD_JS + """
 </body>
 </html>"""
 
@@ -377,18 +423,6 @@ STORY_TEMPLATE = """<!doctype html>
 </a>
 {% endfor %}
 </main>
-<script>
-(function () {
-  var KEY = "feedmenews_read";
-  var read;
-  try { read = JSON.parse(localStorage.getItem(KEY) || "[]"); } catch (e) { read = []; }
-  var id = String({{ story.id }});
-  if (read.indexOf(id) === -1 && read.indexOf({{ story.id }}) === -1) {
-    read.push(id);
-    try { localStorage.setItem(KEY, JSON.stringify(read)); } catch (e) {}
-  }
-})();
-</script>
 </body>
 </html>"""
 
@@ -407,8 +441,19 @@ def strip_html(text):
     return text
 
 
-def fetch_stories(is_review, sort):
-    order_by = "latest DESC" if sort == "recent" else "n DESC, latest DESC"
+def valid_view():
+    v = request.args.get("view", "recent")
+    return v if v in ("recent", "covered", "read") else "recent"
+
+
+def fetch_stories(is_review, view):
+    if view == "read":
+        where_extra = "AND (s.read_at IS NOT NULL OR s.dismissed_at IS NOT NULL)"
+        order_by = "COALESCE(s.read_at, s.dismissed_at) DESC"
+    else:
+        where_extra = "AND s.read_at IS NULL AND s.dismissed_at IS NULL"
+        order_by = "n DESC, latest DESC" if view == "covered" else "latest DESC"
+
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
@@ -418,6 +463,8 @@ def fetch_stories(is_review, sort):
             s.title,
             s.opencritic_score,
             s.opencritic_tier,
+            s.read_at,
+            s.dismissed_at,
             count(*) AS n,
             count(*) FILTER (WHERE a.source_tier = 'trusted') AS trusted_n,
             count(*) FILTER (WHERE a.source_tier = 'niche') AS niche_n,
@@ -425,8 +472,8 @@ def fetch_stories(is_review, sort):
             max(COALESCE(a.published_at, a.fetched_at)) AS latest
         FROM stories s
         JOIN articles a ON a.story_id = s.id
-        WHERE s.is_review = %s
-        GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier
+        WHERE s.is_review = %s {where_extra}
+        GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier, s.read_at, s.dismissed_at
         ORDER BY {order_by}
         LIMIT 30
         """,
@@ -443,6 +490,7 @@ def fetch_stories(is_review, sort):
         )
         sources = [(r["source"], r["source_tier"]) for r in cur.fetchall()]
         delta = (now - row["latest"]).total_seconds() if row["latest"] else 0
+        interaction_time = row["read_at"] or row["dismissed_at"]
         stories.append({
             "id": row["id"],
             "title": row["title"],
@@ -454,6 +502,8 @@ def fetch_stories(is_review, sort):
             "time_ago": humanize(delta),
             "opencritic_score": row["opencritic_score"],
             "opencritic_tier": row["opencritic_tier"],
+            "was_discarded_only": bool(row["dismissed_at"] and not row["read_at"]),
+            "interaction_ago": humanize((now - interaction_time).total_seconds()) if interaction_time else "",
         })
 
     cur.execute("SELECT count(DISTINCT source) FROM articles")
@@ -464,29 +514,35 @@ def fetch_stories(is_review, sort):
     return stories, source_count
 
 
-def valid_sort():
-    s = request.args.get("sort", "covered")
-    return s if s in ("covered", "recent") else "covered"
-
-
 @app.route("/")
 def index():
-    sort = valid_sort()
-    stories, source_count = fetch_stories(is_review=False, sort=sort)
+    view = valid_view()
+    stories, source_count = fetch_stories(is_review=False, view=view)
     return render_template_string(
         FEED_TEMPLATE, stories=stories, source_count=source_count,
-        active_tab="main", base_path="/", sort=sort,
+        active_tab="main", base_path="/", view=view,
     )
 
 
 @app.route("/reviews")
 def reviews():
-    sort = valid_sort()
-    stories, source_count = fetch_stories(is_review=True, sort=sort)
+    view = valid_view()
+    stories, source_count = fetch_stories(is_review=True, view=view)
     return render_template_string(
         FEED_TEMPLATE, stories=stories, source_count=source_count,
-        active_tab="reviews", base_path="/reviews", sort=sort,
+        active_tab="reviews", base_path="/reviews", view=view,
     )
+
+
+@app.route("/story/<int:story_id>/discard", methods=["POST"])
+def discard_story(story_id):
+    conn = psycopg2.connect(DB_URL)
+    cur = conn.cursor()
+    cur.execute("UPDATE stories SET dismissed_at = now() WHERE id = %s", (story_id,))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return jsonify(ok=True)
 
 
 @app.route("/story/<int:story_id>")
@@ -505,6 +561,12 @@ def story_detail(story_id):
         cur.close()
         conn.close()
         return "Story not found", 404
+
+    cur.execute(
+        "UPDATE stories SET read_at = COALESCE(read_at, now()) WHERE id = %s",
+        (story_id,),
+    )
+    conn.commit()
 
     cur.execute(
         """
