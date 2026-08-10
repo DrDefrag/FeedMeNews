@@ -296,9 +296,9 @@ document.addEventListener("click", function (e) {
   if (!btn) return;
   e.preventDefault();
   e.stopPropagation();
-  var id = btn.getAttribute("data-discard-id");
+  var url = btn.getAttribute("data-action");
   var card = btn.closest(".card");
-  fetch("/story/" + id + "/discard", { method: "POST" }).then(function (r) {
+  fetch(url, { method: "POST" }).then(function (r) {
     if (r.ok && card) {
       card.style.opacity = "0";
       card.style.transform = "scale(0.96)";
@@ -339,30 +339,19 @@ FEED_TEMPLATE = """<!doctype html>
 </div>
 <main>
 {% for story in stories %}
+<div class="card">
+<button class="discard-btn" data-action="/story/{{ story.id }}/{{ 'archive' if view == 'read' else 'discard' }}" aria-label="{{ 'Remove' if view == 'read' else 'Discard' }}">&times;</button>
+<a class="card-link with-discard" href="/story/{{ story.id }}">
 {% if view == 'read' %}
-<a class="card" href="/story/{{ story.id }}">
 <h2>{{ story.title }}</h2>
 <p class="meta">{{ story.n }} source{{ 's' if story.n != 1 else '' }} &middot; {{ 'Discarded' if story.was_discarded_only else 'Read' }} {{ story.interaction_ago }}</p>
-<div class="bar">
-{% if story.trusted_n %}<div style="flex:{{ story.trusted_n }};background:var(--trust);"></div>{% endif %}
-{% if story.niche_n %}<div style="flex:{{ story.niche_n }};background:var(--niche);"></div>{% endif %}
-{% if story.community_n %}<div style="flex:{{ story.community_n }};background:var(--comm);"></div>{% endif %}
-</div>
-<div class="chips">
-{% for src, tier in story.sources %}
-<span class="chip" style="background:var(--{{ tier }}-bg); color:var(--{{ tier }}-fg);">{{ src }}</span>
-{% endfor %}
-</div>
-</a>
 {% else %}
-<div class="card">
-<button class="discard-btn" data-discard-id="{{ story.id }}" aria-label="Discard">&times;</button>
-<a class="card-link with-discard" href="/story/{{ story.id }}">
 {% if story.opencritic_score and story.opencritic_score > 0 %}
 <span class="score-chip" style="background:var(--{{ (story.opencritic_tier or 'strong')|lower }}-bg); color:var(--{{ (story.opencritic_tier or 'strong')|lower }}-fg);">{{ story.opencritic_score|round|int }}{% if story.opencritic_tier %} &middot; {{ story.opencritic_tier }}{% endif %}</span><br>
 {% endif %}
 <h2>{{ story.title }}</h2>
 <p class="meta">{{ story.n }} source{{ 's' if story.n != 1 else '' }} &middot; {{ story.time_ago }}</p>
+{% endif %}
 <div class="bar">
 {% if story.trusted_n %}<div style="flex:{{ story.trusted_n }};background:var(--trust);"></div>{% endif %}
 {% if story.niche_n %}<div style="flex:{{ story.niche_n }};background:var(--niche);"></div>{% endif %}
@@ -375,7 +364,6 @@ FEED_TEMPLATE = """<!doctype html>
 </div>
 </a>
 </div>
-{% endif %}
 {% endfor %}
 {% if not stories %}
 <p class="meta">Nothing here yet.</p>
@@ -456,7 +444,7 @@ def fetch_stories(tab, view):
         tab_where = "AND s.is_review = FALSE AND s.is_video = FALSE"
 
     if view == "read":
-        where_extra = f"{tab_where} AND (s.read_at IS NOT NULL OR s.dismissed_at IS NOT NULL)"
+        where_extra = f"{tab_where} AND (s.read_at IS NOT NULL OR s.dismissed_at IS NOT NULL) AND s.archived_at IS NULL"
         order_by = "COALESCE(s.read_at, s.dismissed_at) DESC"
     else:
         where_extra = f"{tab_where} AND s.read_at IS NULL AND s.dismissed_at IS NULL"
@@ -556,6 +544,22 @@ def discard_story(story_id):
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor()
     cur.execute("UPDATE stories SET dismissed_at = now() WHERE id = %s", (story_id,))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return jsonify(ok=True)
+
+
+@app.route("/story/<int:story_id>/archive", methods=["POST"])
+def archive_story(story_id):
+    # A third state layered on top of read_at/dismissed_at, for
+    # permanently removing something from the Read section itself (the
+    # user asked to be able to discard from there too - Read is defined
+    # as "read_at or dismissed_at is set", so re-setting dismissed_at on
+    # an already-read item wouldn't hide it from that same view).
+    conn = psycopg2.connect(DB_URL)
+    cur = conn.cursor()
+    cur.execute("UPDATE stories SET archived_at = now() WHERE id = %s", (story_id,))
     conn.commit()
     cur.close()
     conn.close()
