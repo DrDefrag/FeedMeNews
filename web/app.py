@@ -149,19 +149,19 @@ transition: opacity 0.2s ease, transform 0.2s ease;
 display: block;
 }
 .card-link.with-discard {
-padding-top: 28px;
+padding-top: 54px;
 }
 .discard-btn {
 position: absolute;
-top: 12px;
-left: 12px;
-width: 28px;
-height: 28px;
+top: 8px;
+left: 8px;
+width: 44px;
+height: 44px;
 border-radius: 50%;
 border: none;
 background: var(--border);
 color: var(--text-secondary);
-font-size: 16px;
+font-size: 20px;
 line-height: 1;
 display: flex;
 align-items: center;
@@ -393,7 +393,7 @@ STORY_TEMPLATE = """<!doctype html>
 <style>""" + CSS + """</style>
 </head>
 <body>
-<a class="back" href="/">&larr; All stories</a>
+<a class="back" href="/" onclick="if (window.history.length > 1) { history.back(); return false; }">&larr; Back</a>
 <main style="padding-top:14px;">
 <h1 style="font-size:19px;font-weight:600;line-height:1.35;margin:0 0 8px;">{{ story.title }}</h1>
 <p class="meta">{{ n }} source{{ 's' if n != 1 else '' }}</p>
