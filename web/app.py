@@ -90,7 +90,7 @@ border-bottom: 1px solid var(--border);
 .tab {
 font-size: 14px;
 font-weight: 600;
-padding: 8px 14px;
+padding: 8px 12px;
 border-radius: 8px 8px 0 0;
 color: var(--text-secondary);
 }
@@ -325,6 +325,7 @@ FEED_TEMPLATE = """<!doctype html>
 <div class="tabs">
 <a href="/" class="tab {{ 'active' if active_tab == 'main' else '' }}">Main</a>
 <a href="/reviews" class="tab {{ 'active' if active_tab == 'reviews' else '' }}">Reviews</a>
+<a href="/video" class="tab {{ 'active' if active_tab == 'video' else '' }}">Video</a>
 </div>
 <div class="view-row">
 <a href="{{ base_path }}" class="view-link {{ 'active' if view == 'recent' else '' }}">Most recent</a>
@@ -446,12 +447,19 @@ def valid_view():
     return v if v in ("recent", "covered", "read") else "recent"
 
 
-def fetch_stories(is_review, view):
+def fetch_stories(tab, view):
+    if tab == "reviews":
+        tab_where = "AND s.is_review = TRUE"
+    elif tab == "video":
+        tab_where = "AND s.is_video = TRUE"
+    else:
+        tab_where = "AND s.is_review = FALSE AND s.is_video = FALSE"
+
     if view == "read":
-        where_extra = "AND (s.read_at IS NOT NULL OR s.dismissed_at IS NOT NULL)"
+        where_extra = f"{tab_where} AND (s.read_at IS NOT NULL OR s.dismissed_at IS NOT NULL)"
         order_by = "COALESCE(s.read_at, s.dismissed_at) DESC"
     else:
-        where_extra = "AND s.read_at IS NULL AND s.dismissed_at IS NULL"
+        where_extra = f"{tab_where} AND s.read_at IS NULL AND s.dismissed_at IS NULL"
         order_by = "n DESC, latest DESC" if view == "covered" else "latest DESC"
 
     conn = psycopg2.connect(DB_URL)
@@ -472,12 +480,11 @@ def fetch_stories(is_review, view):
             max(COALESCE(a.published_at, a.fetched_at)) AS latest
         FROM stories s
         JOIN articles a ON a.story_id = s.id
-        WHERE s.is_review = %s {where_extra}
+        WHERE 1=1 {where_extra}
         GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier, s.read_at, s.dismissed_at
         ORDER BY {order_by}
         LIMIT 30
-        """,
-        (is_review,),
+        """
     )
     story_rows = cur.fetchall()
 
@@ -517,7 +524,7 @@ def fetch_stories(is_review, view):
 @app.route("/")
 def index():
     view = valid_view()
-    stories, source_count = fetch_stories(is_review=False, view=view)
+    stories, source_count = fetch_stories(tab="main", view=view)
     return render_template_string(
         FEED_TEMPLATE, stories=stories, source_count=source_count,
         active_tab="main", base_path="/", view=view,
@@ -527,10 +534,20 @@ def index():
 @app.route("/reviews")
 def reviews():
     view = valid_view()
-    stories, source_count = fetch_stories(is_review=True, view=view)
+    stories, source_count = fetch_stories(tab="reviews", view=view)
     return render_template_string(
         FEED_TEMPLATE, stories=stories, source_count=source_count,
         active_tab="reviews", base_path="/reviews", view=view,
+    )
+
+
+@app.route("/video")
+def video():
+    view = valid_view()
+    stories, source_count = fetch_stories(tab="video", view=view)
+    return render_template_string(
+        FEED_TEMPLATE, stories=stories, source_count=source_count,
+        active_tab="video", base_path="/video", view=view,
     )
 
 
@@ -551,7 +568,7 @@ def story_detail(story_id):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
         """
-        SELECT id, title, is_review, opencritic_score, opencritic_tier, opencritic_url
+        SELECT id, title, is_review, is_video, opencritic_score, opencritic_tier, opencritic_url
         FROM stories WHERE id = %s
         """,
         (story_id,),
