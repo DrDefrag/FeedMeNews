@@ -20,14 +20,21 @@ RSS_SOURCES = [
     {"name": "Eurogamer", "tier": "trusted", "url": "https://www.eurogamer.net/feed"},
     {"name": "GameSpot", "tier": "trusted", "url": "https://www.gamespot.com/feeds/game-news/"},
     {"name": "GamesRadar", "tier": "trusted", "url": "https://www.gamesradar.com/rss/"},
+    {"name": "Kotaku", "tier": "trusted", "url": "https://kotaku.com/feed"},
+    {"name": "TheGamer", "tier": "trusted", "url": "https://www.thegamer.com/feed/"},
     {"name": "Rock Paper Shotgun", "tier": "niche", "url": "https://www.rockpapershotgun.com/feed"},
     {"name": "NintendoLife", "tier": "niche", "url": "https://www.nintendolife.com/feeds/latest"},
     {"name": "VG247", "tier": "niche", "url": "https://www.vg247.com/feed"},
+    {"name": "Push Square", "tier": "niche", "url": "https://www.pushsquare.com/feeds/latest"},
+    {"name": "Pure Xbox", "tier": "niche", "url": "https://www.purexbox.com/feeds/latest"},
+    {"name": "PCGamesN", "tier": "niche", "url": "https://www.pcgamesn.com/feed"},
 ]
 
 REDDIT_SOURCES = [
     {"name": "r/Games", "tier": "community", "url": "https://www.reddit.com/r/Games/.rss"},
     {"name": "r/pcgaming", "tier": "community", "url": "https://www.reddit.com/r/pcgaming/.rss"},
+    {"name": "r/NintendoSwitch", "tier": "community", "url": "https://www.reddit.com/r/NintendoSwitch/.rss"},
+    {"name": "r/PS5", "tier": "community", "url": "https://www.reddit.com/r/PS5/.rss"},
 ]
 
 HEADERS = {"User-Agent": "gaming-news-aggregator/0.1 (personal project)"}
