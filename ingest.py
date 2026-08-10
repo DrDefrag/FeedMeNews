@@ -113,7 +113,7 @@ WALKTHROUGH_PATTERN = re.compile(
 # budget, decided together with the user on 9 Aug 2026 rather than just
 # polling less often overall.
 REVIEW_SCORE_INTERVAL_SECONDS = 3600
-MAX_OPENCRITIC_LOOKUPS_PER_DAY = 20
+MAX_OPENCRITIC_LOOKUPS_PER_DAY = 10
 
 
 def ensure_schema(conn):
