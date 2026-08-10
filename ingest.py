@@ -85,7 +85,11 @@ CLUSTER_SIMILARITY_THRESHOLD = 0.4
 # unrelated games to cluster together purely on shared template words.
 # Extending the stopword list to cover this class of boilerplate fixed it
 # without breaking genuine multi-source clusters (verified against real
-# data, 9 Aug 2026).
+# data, 9 Aug 2026). Known remaining gap found 10 Aug 2026: multi-game
+# showcase events (e.g. "THQ Nordic Showcase 2026") can still merge
+# different games' trailer coverage together, since the shared event name
+# is specific meaningful text, not generic filler we can safely strip the
+# same way - deferred, needs its own proper fix, not a quick stopword add.
 EXTRA_STOPWORDS = {
     "official", "release", "date", "trailer", "reveal", "gameplay",
     "announcement", "announced", "launches", "launch", "coming", "new",
@@ -110,8 +114,11 @@ WALKTHROUGH_PATTERN = re.compile(
 # free and runs every ingestion cycle so review stories move into the
 # Reviews section quickly; the actual OpenCritic query is the part that
 # costs quota, so it runs on its own slower cadence with a tracked daily
-# budget, decided together with the user on 9 Aug 2026 rather than just
-# polling less often overall.
+# budget. Lowered from 20 to 10 on 10 Aug 2026 after the user flagged
+# being at 85% of the RapidAPI daily allowance - 20/25 was only ever an
+# 80% self-imposed ceiling by design, too close for comfort especially
+# now that more video sources mean more titles containing "review" per
+# day than before.
 REVIEW_SCORE_INTERVAL_SECONDS = 3600
 MAX_OPENCRITIC_LOOKUPS_PER_DAY = 10
 
@@ -146,8 +153,26 @@ def ensure_schema(conn):
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS opencritic_review_count INTEGER;")
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS opencritic_game_name TEXT;")
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS opencritic_checked_at TIMESTAMPTZ;")
+        # Read/discard tracking (added 10 Aug 2026). Single-user personal
+        # tool, no accounts, so this is one shared record per story rather
+        # than per-visitor - revisit if this ever becomes multi-user.
+        # read_at = organic click-through (set once, first visit only).
+        # dismissed_at = explicit discard tap. Kept as two separate columns
+        # even though both currently surface in the same "Read" section,
+        # since "engaged with" and "actively skipped" are different signals
+        # worth preserving for the interest-profile idea discussed with
+        # the user - collapsing them now would lose data we can't get back.
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ;")
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS dismissed_at TIMESTAMPTZ;")
+        # archived_at (added 10 Aug 2026): a third state layered on top of
+        # the two above, for permanently removing something from the Read
+        # section itself (the user asked to be able to discard from there
+        # too - read_at/dismissed_at alone can't express that, since Read
+        # is defined as "either one is set", so re-setting dismissed_at on
+        # an already-read item wouldn't hide it). Nothing is ever deleted,
+        # just progressively filtered - consistent with how this project
+        # has handled state throughout.
+        cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;")
         # Video support (added 10 Aug 2026). is_video/is_walkthrough live on
         # articles since they're known unconditionally at ingestion (we know
         # for certain whether a fetch came from a YouTube feed - no title
