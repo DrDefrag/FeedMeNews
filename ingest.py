@@ -40,9 +40,20 @@ REDDIT_SOURCES = [
 HEADERS = {"User-Agent": "gaming-news-aggregator/0.1 (personal project)"}
 ATOM_NS = {"a": "http://www.w3.org/2005/Atom"}
 
-# Small pause between requests to the same host (Reddit especially) so we
-# don't trip rate limits by hitting it twice in immediate succession.
+# Small pause between requests to the same host so we don't trip rate
+# limits by hitting it repeatedly in immediate succession. Press outlets
+# haven't shown any sensitivity to this; Reddit has, so it gets its own,
+# longer delay below.
 REQUEST_DELAY_SECONDS = 5
+
+# Found empirically on 10 Aug 2026: 5s between Reddit requests was fine
+# with only 2 subreddits, but after adding r/NintendoSwitch and r/PS5
+# (4 subreddits total), 3 of the 4 started hitting 429s consistently
+# across multiple full runs - only the first request in the sequence
+# succeeded reliably. 5s isn't enough spacing once several Reddit requests
+# happen in the same short window; giving Reddit specifically more room
+# between requests than the press feeds need.
+REDDIT_REQUEST_DELAY_SECONDS = 15
 
 # Story clustering settings. Tuned empirically against real data on 9 Aug
 # 2026: threshold 0.4 gives ~25 clusters out of ~290 articles, with the
@@ -185,7 +196,7 @@ def run_once(conn):
             print(f"[ok] {source['name']}")
         except Exception as e:
             print(f"[error] {source['name']}: {e}")
-        time.sleep(REQUEST_DELAY_SECONDS)
+        time.sleep(REDDIT_REQUEST_DELAY_SECONDS)
 
 
 def cluster_recent_articles(conn):
