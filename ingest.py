@@ -98,6 +98,17 @@ def ensure_schema(conn):
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS opencritic_review_count INTEGER;")
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS opencritic_game_name TEXT;")
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS opencritic_checked_at TIMESTAMPTZ;")
+        # Read/discard tracking (added 10 Aug 2026). Single-user personal
+        # tool, no accounts, so this is one shared record per story rather
+        # than per-visitor - revisit if this ever becomes multi-user.
+        # read_at = organic click-through (set once, first visit only).
+        # dismissed_at = explicit discard tap. Kept as two separate columns
+        # even though both currently surface in the same "Read" section,
+        # since "engaged with" and "actively skipped" are different signals
+        # worth preserving for the interest-profile idea discussed with
+        # the user - collapsing them now would lose data we can't get back.
+        cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ;")
+        cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS dismissed_at TIMESTAMPTZ;")
     conn.commit()
 
 
