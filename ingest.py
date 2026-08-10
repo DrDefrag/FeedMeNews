@@ -37,13 +37,31 @@ REDDIT_SOURCES = [
     {"name": "r/PS5", "tier": "community", "url": "https://www.reddit.com/r/PS5/.rss"},
 ]
 
+# YouTube RSS via channel_id - no API key, no OAuth, no quota. Channel IDs
+# found by loading each channel page and reading the link rel=alternate
+# type=application/rss+xml tag YouTube includes by default - the handle
+# (@name) is not the same as the channel_id needed here. Verified live on
+# 10 Aug 2026: all 7 parse cleanly with feedparser (unlike Reddit's Atom
+# variant, which needed manual ElementTree parsing - YouTube's is standard).
+# Some entries are YouTube Shorts, not full videos - left in for now rather
+# than adding filtering complexity before seeing if it's actually a problem.
+VIDEO_SOURCES = [
+    {"name": "IGN", "tier": "trusted", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCKy1dAqELo0zrOtPkf0eTMw"},
+    {"name": "GameSpot", "tier": "trusted", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCbu2SsF-Or3Rsn3NxqODImw"},
+    {"name": "VGC", "tier": "trusted", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCuzaJiIORaXi7DsuEs03Gow"},
+    {"name": "Digital Foundry", "tier": "trusted", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC9PBzalIcEQCsiIkq36PyUA"},
+    {"name": "Kinda Funny Games", "tier": "niche", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCT6QFE3peNry9PdO5uGj96g"},
+    {"name": "Game Informer", "tier": "trusted", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCK-65DO2oOxxMwphl2tYtcw"},
+    {"name": "Polygon", "tier": "trusted", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCuVxaQDraOja6xKidcmoufA"},
+]
+
 HEADERS = {"User-Agent": "gaming-news-aggregator/0.1 (personal project)"}
 ATOM_NS = {"a": "http://www.w3.org/2005/Atom"}
 
 # Small pause between requests to the same host so we don't trip rate
 # limits by hitting it repeatedly in immediate succession. Press outlets
-# haven't shown any sensitivity to this; Reddit has, so it gets its own,
-# longer delay below.
+# and YouTube haven't shown any sensitivity to this; Reddit has, so it
+# gets its own, longer delay below.
 REQUEST_DELAY_SECONDS = 5
 
 # Found empirically on 10 Aug 2026: 5s between Reddit requests was fine
@@ -74,6 +92,18 @@ EXTRA_STOPWORDS = {
 }
 STOPWORDS = list(ENGLISH_STOP_WORDS.union(EXTRA_STOPWORDS))
 STOPWORDS_SET = set(STOPWORDS)
+
+# Walkthroughs/playthroughs are serial (Part 1, Part 2, ...) rather than
+# episodic like everything else we ingest - clustering them would either
+# flood the feed with near-identical singleton cards, or worse, merge them
+# into a nonsense "story" that isn't really one. Detected the same way as
+# review titles (a simple pattern match) and excluded from clustering
+# entirely below - the raw rows are still kept in the articles table, just
+# never linked to a story, so nothing is thrown away, it's just not shown.
+WALKTHROUGH_PATTERN = re.compile(
+    r"\b(walkthrough|playthrough|let'?s play|full\s+playthrough|part\s*\d+)\b",
+    re.IGNORECASE,
+)
 
 # Review score lookups (OpenCritic via RapidAPI). Free tier: 25 searches/day,
 # 200 requests/day, non-commercial use only. Detection (is_review flag) is
@@ -116,29 +146,31 @@ def ensure_schema(conn):
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS opencritic_review_count INTEGER;")
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS opencritic_game_name TEXT;")
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS opencritic_checked_at TIMESTAMPTZ;")
-        # Read/discard tracking (added 10 Aug 2026). Single-user personal
-        # tool, no accounts, so this is one shared record per story rather
-        # than per-visitor - revisit if this ever becomes multi-user.
-        # read_at = organic click-through (set once, first visit only).
-        # dismissed_at = explicit discard tap. Kept as two separate columns
-        # even though both currently surface in the same "Read" section,
-        # since "engaged with" and "actively skipped" are different signals
-        # worth preserving for the interest-profile idea discussed with
-        # the user - collapsing them now would lose data we can't get back.
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ;")
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS dismissed_at TIMESTAMPTZ;")
+        # Video support (added 10 Aug 2026). is_video/is_walkthrough live on
+        # articles since they're known unconditionally at ingestion (we know
+        # for certain whether a fetch came from a YouTube feed - no title
+        # guessing needed, unlike review detection). stories.is_video is a
+        # separate flag set by mark_video_stories() below, aggregated from
+        # whether any member article is a video - mirrors how is_review
+        # already works, just via a join instead of a title check.
+        cur.execute("ALTER TABLE articles ADD COLUMN IF NOT EXISTS is_video BOOLEAN NOT NULL DEFAULT FALSE;")
+        cur.execute("ALTER TABLE articles ADD COLUMN IF NOT EXISTS is_walkthrough BOOLEAN NOT NULL DEFAULT FALSE;")
+        cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS is_video BOOLEAN NOT NULL DEFAULT FALSE;")
     conn.commit()
 
 
-def upsert_article(conn, source, tier, title, url, summary, published_at):
+def upsert_article(conn, source, tier, title, url, summary, published_at, is_video=False):
+    is_walkthrough = bool(is_video and WALKTHROUGH_PATTERN.search(title))
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO articles (source, source_tier, title, url, summary, published_at)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO articles (source, source_tier, title, url, summary, published_at, is_video, is_walkthrough)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (url) DO NOTHING;
             """,
-            (source, tier, title, url, summary, published_at),
+            (source, tier, title, url, summary, published_at, is_video, is_walkthrough),
         )
     conn.commit()
 
@@ -154,6 +186,21 @@ def fetch_rss(conn, source):
             published = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
         if title and url:
             upsert_article(conn, source["name"], source["tier"], title, url, summary, published)
+
+
+def fetch_video(conn, source):
+    # YouTube's channel Atom feeds parse fine with feedparser (unlike
+    # Reddit's), verified live on 10 Aug 2026 against all 7 channels.
+    feed = feedparser.parse(source["url"])
+    for entry in feed.entries:
+        title = entry.get("title", "").strip()
+        url = entry.get("link", "").strip()
+        summary = (entry.get("summary", "") or "")[:400]
+        published = None
+        if entry.get("published_parsed"):
+            published = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
+        if title and url:
+            upsert_article(conn, source["name"], source["tier"], title, url, summary, published, is_video=True)
 
 
 def fetch_reddit(conn, source):
@@ -190,6 +237,14 @@ def run_once(conn):
             print(f"[error] {source['name']}: {e}")
         time.sleep(REQUEST_DELAY_SECONDS)
 
+    for source in VIDEO_SOURCES:
+        try:
+            fetch_video(conn, source)
+            print(f"[ok] {source['name']} (video)")
+        except Exception as e:
+            print(f"[error] {source['name']} (video): {e}")
+        time.sleep(REQUEST_DELAY_SECONDS)
+
     for source in REDDIT_SOURCES:
         try:
             fetch_reddit(conn, source)
@@ -207,7 +262,9 @@ def cluster_recent_articles(conn):
     values stable across runs rather than reshuffling every time, any
     cluster that already has one or more story_id values assigned keeps
     the smallest (earliest-created) one as canonical, and every member of
-    that cluster gets updated to match it.
+    that cluster gets updated to match it. Walkthroughs are excluded
+    entirely (see WALKTHROUGH_PATTERN above) - they never get a story_id,
+    so they never surface anywhere, by design.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -215,6 +272,7 @@ def cluster_recent_articles(conn):
             SELECT id, title, story_id
             FROM articles
             WHERE COALESCE(published_at, fetched_at) > now() - interval '%s days'
+            AND is_walkthrough = FALSE
             """
             % CLUSTER_WINDOW_DAYS
         )
@@ -284,11 +342,30 @@ def mark_review_stories(conn):
     calls. This is what makes a story show up in the Reviews section
     quickly; the (quota-limited) score lookup below is a separate, slower
     step that can catch up later without delaying the story appearing.
+    Source-agnostic - a video review's title matches exactly the same way
+    a text review's does.
     """
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE stories SET is_review = TRUE WHERE title ILIKE %s AND is_review = FALSE",
             ("%review%",),
+        )
+    conn.commit()
+
+
+def mark_video_stories(conn):
+    """Flag any story that has at least one video-sourced article, every
+    cycle - free, just a join. A story can be both is_review and is_video
+    at once (a video review) - that's intentional, it should surface in
+    both the Reviews and Video tabs rather than forcing an either/or.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE stories s SET is_video = TRUE
+            WHERE s.is_video = FALSE
+            AND EXISTS (SELECT 1 FROM articles a WHERE a.story_id = s.id AND a.is_video = TRUE)
+            """
         )
     conn.commit()
 
@@ -456,6 +533,11 @@ def main():
             print("[ok] review detection")
         except Exception as e:
             print(f"[error] review detection: {e}")
+        try:
+            mark_video_stories(conn)
+            print("[ok] video detection")
+        except Exception as e:
+            print(f"[error] video detection: {e}")
 
         now = datetime.now(timezone.utc)
         due = (
