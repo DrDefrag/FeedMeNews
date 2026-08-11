@@ -20,6 +20,13 @@ DB_URL = os.environ["DATABASE_URL"]
 # at all - a read story ages out exactly the same way an unread one does.
 FEED_WINDOW_DAYS = 2
 
+# Seconds a discarded card stays in the DOM (dimmed) before actually being
+# removed, giving the Undo toast below a real window to act in. The
+# server-side dismissed_at is set immediately on discard regardless - this
+# delay is purely cosmetic, giving the user a chance to reverse the visual
+# removal before it's gone with no trace.
+UNDO_WINDOW_MS = 5000
+
 # Small inline stopword list for the themes word-frequency stat - kept
 # separate from ingest.py's clustering stopwords deliberately, since the
 # two services don't share code or dependencies (no sklearn in the web
@@ -41,6 +48,14 @@ WORD_STOPWORDS = {
 # story_detail(), just applied to image_url instead. Images are always
 # hotlinked to the outlet's own URL, never downloaded or re-hosted here.
 TIER_RANK_SQL = "CASE source_tier WHEN 'trusted' THEN 0 WHEN 'niche' THEN 1 ELSE 2 END"
+
+ICON_MAIN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><line x1="7" y1="9" x2="17" y2="9"></line><line x1="7" y1="13" x2="17" y2="13"></line><line x1="7" y1="17" x2="13" y2="17"></line></svg>'
+ICON_REVIEWS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15 9 22 9.5 17 14.5 18.5 22 12 18 5.5 22 7 14.5 2 9.5 9 9"></polygon></svg>'
+ICON_VIDEO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><polygon points="10 8 16 12 10 16" fill="currentColor" stroke="none"></polygon></svg>'
+ICON_THEMES = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2l1.8 6.2L20 10l-6.2 1.8L12 18l-1.8-6.2L4 10l6.2-1.8z"></path></svg>'
+ICON_X = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"></line><line x1="18" y1="6" x2="6" y2="18"></line></svg>'
+ICON_HEART = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.8 1-1a5.5 5.5 0 0 0 0-7.8z"></path></svg>'
+ICON_UP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="6 11 12 5 18 11"></polyline></svg>'
 
 
 CSS = """
@@ -114,6 +129,13 @@ font-size: 13px;
 color: var(--text-secondary);
 margin: 0;
 }
+.sticky-nav {
+position: sticky;
+top: 0;
+background: var(--bg);
+z-index: 10;
+padding-top: 2px;
+}
 .tabs {
 display: flex;
 gap: 4px;
@@ -124,35 +146,58 @@ border-bottom: 1px solid var(--border);
 overflow-x: auto;
 }
 .tab {
+display: flex;
+align-items: center;
+gap: 5px;
+position: relative;
 font-size: 14px;
 font-weight: 600;
-padding: 8px 12px;
-border-radius: 8px 8px 0 0;
+padding: 9px 12px;
 color: var(--text-secondary);
 white-space: nowrap;
 }
+.tab-icon {
+width: 15px;
+height: 15px;
+flex-shrink: 0;
+}
 .tab.active {
 color: var(--text);
-background: var(--card);
-border: 1px solid var(--border);
-border-bottom-color: var(--card);
-margin-bottom: -1px;
 }
-.view-row {
+.tab.active::after {
+content: "";
+position: absolute;
+bottom: -1px;
+left: 8px;
+right: 8px;
+height: 2px;
+background: var(--text);
+border-radius: 2px 2px 0 0;
+}
+.segmented {
 display: flex;
-gap: 16px;
-padding: 12px 16px;
+background: var(--border);
+border-radius: 10px;
+padding: 3px;
+margin: 10px 16px 12px;
 max-width: 640px;
-margin: 0 auto;
+margin-left: auto;
+margin-right: auto;
+gap: 2px;
 }
-.view-link {
+.segmented-option {
+flex: 1;
+text-align: center;
 font-size: 13px;
+font-weight: 600;
+padding: 7px 0;
+border-radius: 8px;
 color: var(--text-secondary);
 }
-.view-link.active {
+.segmented-option.active {
+background: var(--card);
 color: var(--text);
-font-weight: 600;
-text-decoration: underline;
+box-shadow: 0 1px 2px rgba(0,0,0,0.08);
 }
 .legend {
 display: flex;
@@ -186,6 +231,9 @@ overflow: hidden;
 .card.read {
 opacity: 0.5;
 }
+.card.pending-remove {
+opacity: 0.35;
+}
 .card-image {
 display: block;
 width: calc(100% + 32px);
@@ -197,28 +245,38 @@ background: var(--border);
 .card-link {
 display: block;
 }
-.card-link.with-discard {
+.card-link.with-buttons {
 padding-top: 54px;
 }
-.discard-btn {
+.discard-btn, .like-btn {
 position: absolute;
 top: 8px;
-left: 8px;
 width: 44px;
 height: 44px;
 border-radius: 50%;
 border: none;
-background: rgba(0,0,0,0.45);
+background: rgba(0,0,0,0.4);
+backdrop-filter: blur(6px);
+-webkit-backdrop-filter: blur(6px);
 color: #fff;
-font-size: 20px;
-line-height: 1;
 display: flex;
 align-items: center;
 justify-content: center;
 cursor: pointer;
 z-index: 2;
 padding: 0;
+box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+transition: transform 0.15s ease;
 }
+.discard-btn { left: 8px; }
+.like-btn { right: 8px; }
+.discard-btn:active, .like-btn:active {
+transform: scale(0.88);
+}
+.discard-btn svg { width: 17px; height: 17px; }
+.like-btn svg { width: 20px; height: 20px; }
+.like-btn.liked { color: var(--niche); }
+.like-btn.liked svg { fill: currentColor; }
 .card h2 {
 font-size: 16px;
 font-weight: 600;
@@ -374,26 +432,174 @@ font-size: 13px;
 color: var(--text-secondary);
 font-weight: 600;
 }
+.back-to-top {
+position: fixed;
+bottom: 24px;
+right: 20px;
+width: 46px;
+height: 46px;
+border-radius: 50%;
+border: none;
+background: var(--text);
+color: var(--bg);
+display: flex;
+align-items: center;
+justify-content: center;
+cursor: pointer;
+box-shadow: 0 3px 10px rgba(0,0,0,0.25);
+opacity: 0;
+pointer-events: none;
+transform: translateY(12px);
+transition: opacity 0.2s ease, transform 0.2s ease;
+z-index: 15;
+}
+.back-to-top.visible {
+opacity: 1;
+pointer-events: auto;
+transform: translateY(0);
+}
+.back-to-top svg { width: 20px; height: 20px; }
+.toast {
+position: fixed;
+bottom: 24px;
+left: 50%;
+transform: translateX(-50%) translateY(16px);
+background: var(--text);
+color: var(--bg);
+padding: 13px 16px;
+border-radius: 12px;
+font-size: 14px;
+display: flex;
+align-items: center;
+gap: 18px;
+opacity: 0;
+pointer-events: none;
+transition: opacity 0.2s ease, transform 0.2s ease;
+z-index: 20;
+box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+white-space: nowrap;
+}
+.toast.visible {
+opacity: 1;
+pointer-events: auto;
+transform: translateX(-50%) translateY(0);
+}
+.toast-undo {
+background: none;
+border: none;
+color: var(--bg);
+font-weight: 700;
+font-size: 14px;
+cursor: pointer;
+text-decoration: underline;
+padding: 0;
+}
 """
 
-DISCARD_JS = """
+CARD_INTERACTIONS_JS = """
 <script>
-document.addEventListener("click", function (e) {
-  var btn = e.target.closest(".discard-btn");
-  if (!btn) return;
-  e.preventDefault();
-  e.stopPropagation();
-  var url = btn.getAttribute("data-action");
-  var card = btn.closest(".card");
-  fetch(url, { method: "POST" }).then(function (r) {
-    if (r.ok && card) {
-      card.style.opacity = "0";
-      card.style.transform = "scale(0.96)";
-      setTimeout(function () { card.remove(); }, 200);
+(function () {
+  var toastEl = null;
+  var toastTimeout = null;
+
+  function showToast(message, onUndo) {
+    if (!toastEl) {
+      toastEl = document.createElement("div");
+      toastEl.className = "toast";
+      document.body.appendChild(toastEl);
+    }
+    toastEl.innerHTML = "";
+    var span = document.createElement("span");
+    span.textContent = message;
+    var btn = document.createElement("button");
+    btn.className = "toast-undo";
+    btn.textContent = "Undo";
+    btn.onclick = function () {
+      onUndo();
+      toastEl.classList.remove("visible");
+    };
+    toastEl.appendChild(span);
+    toastEl.appendChild(btn);
+    toastEl.classList.add("visible");
+    clearTimeout(toastTimeout);
+    toastTimeout = setTimeout(function () {
+      toastEl.classList.remove("visible");
+    }, """ + str(UNDO_WINDOW_MS) + """);
+  }
+
+  document.addEventListener("click", function (e) {
+    var discardBtn = e.target.closest(".discard-btn");
+    if (discardBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      var url = discardBtn.getAttribute("data-action");
+      var card = discardBtn.closest(".card");
+      var storyId = discardBtn.getAttribute("data-id");
+      fetch(url, { method: "POST" }).then(function (r) {
+        if (!r.ok) return;
+        card.classList.add("pending-remove");
+        var removeTimeout = setTimeout(function () {
+          card.style.opacity = "0";
+          card.style.transform = "scale(0.96)";
+          setTimeout(function () { card.remove(); }, 200);
+        }, """ + str(UNDO_WINDOW_MS) + """);
+        showToast("Story discarded", function () {
+          clearTimeout(removeTimeout);
+          card.classList.remove("pending-remove");
+          fetch("/story/" + storyId + "/undiscard", { method: "POST" });
+        });
+      });
+      return;
+    }
+
+    var likeBtn = e.target.closest(".like-btn");
+    if (likeBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      var likeUrl = likeBtn.getAttribute("data-action");
+      fetch(likeUrl, { method: "POST" })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (data.liked) {
+            likeBtn.classList.add("liked");
+          } else {
+            likeBtn.classList.remove("liked");
+          }
+        });
+      return;
     }
   });
-});
+})();
 </script>
+"""
+
+BACK_TO_TOP_HTML = """
+<button class="back-to-top" id="backToTop" aria-label="Back to top">""" + ICON_UP + """</button>
+<script>
+(function () {
+  var btn = document.getElementById("backToTop");
+  if (!btn) return;
+  window.addEventListener("scroll", function () {
+    if (window.scrollY > 500) {
+      btn.classList.add("visible");
+    } else {
+      btn.classList.remove("visible");
+    }
+  });
+  btn.addEventListener("click", function () {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  });
+})();
+</script>
+"""
+
+TABS_HTML = """
+<div class="tabs">
+<a href="/" class="tab {{ 'active' if active_tab == 'main' else '' }}">""" + ICON_MAIN + """ Main</a>
+<a href="/reviews" class="tab {{ 'active' if active_tab == 'reviews' else '' }}">""" + ICON_REVIEWS + """ Reviews</a>
+<a href="/video" class="tab {{ 'active' if active_tab == 'video' else '' }}">""" + ICON_VIDEO + """ Video</a>
+<a href="/themes" class="tab {{ 'active' if active_tab == 'themes' else '' }}">""" + ICON_THEMES + """ Themes</a>
+</div>
 """
 
 FEED_TEMPLATE = """<!doctype html>
@@ -409,15 +615,12 @@ FEED_TEMPLATE = """<!doctype html>
 <h1>FeedMeNews</h1>
 <p>Gaming coverage across {{ source_count }} sources, grouped by story</p>
 </header>
-<div class="tabs">
-<a href="/" class="tab {{ 'active' if active_tab == 'main' else '' }}">Main</a>
-<a href="/reviews" class="tab {{ 'active' if active_tab == 'reviews' else '' }}">Reviews</a>
-<a href="/video" class="tab {{ 'active' if active_tab == 'video' else '' }}">Video</a>
-<a href="/themes" class="tab {{ 'active' if active_tab == 'themes' else '' }}">Themes</a>
+<div class="sticky-nav">
+""" + TABS_HTML + """
+<div class="segmented">
+<a href="{{ base_path }}" class="segmented-option {{ 'active' if view == 'recent' else '' }}">Most recent</a>
+<a href="{{ base_path }}?view=covered" class="segmented-option {{ 'active' if view == 'covered' else '' }}">Most covered</a>
 </div>
-<div class="view-row">
-<a href="{{ base_path }}" class="view-link {{ 'active' if view == 'recent' else '' }}">Most recent</a>
-<a href="{{ base_path }}?view=covered" class="view-link {{ 'active' if view == 'covered' else '' }}">Most covered</a>
 </div>
 <div class="legend">
 <span><span class="dot" style="background:var(--trust)"></span>Trusted</span>
@@ -427,8 +630,9 @@ FEED_TEMPLATE = """<!doctype html>
 <main>
 {% for story in stories %}
 <div class="card {{ 'read' if story.is_read else '' }}">
-<button class="discard-btn" data-action="/story/{{ story.id }}/discard" aria-label="Discard">&times;</button>
-<a class="card-link with-discard" href="/story/{{ story.id }}">
+<button class="discard-btn" data-action="/story/{{ story.id }}/discard" data-id="{{ story.id }}" aria-label="Discard">""" + ICON_X + """</button>
+<button class="like-btn {{ 'liked' if story.is_liked else '' }}" data-action="/story/{{ story.id }}/like" aria-label="Like">""" + ICON_HEART + """</button>
+<a class="card-link with-buttons" href="/story/{{ story.id }}">
 {% if story.image_url %}
 <img class="card-image" src="{{ story.image_url }}" loading="lazy" alt="">
 {% endif %}
@@ -454,7 +658,7 @@ FEED_TEMPLATE = """<!doctype html>
 <p class="meta">Nothing here yet.</p>
 {% endif %}
 </main>
-""" + DISCARD_JS + """
+""" + CARD_INTERACTIONS_JS + BACK_TO_TOP_HTML + """
 </body>
 </html>"""
 
@@ -471,11 +675,13 @@ THEMES_TEMPLATE = """<!doctype html>
 <h1>FeedMeNews</h1>
 <p>Gaming coverage across {{ source_count }} sources, grouped by story</p>
 </header>
+<div class="sticky-nav">
 <div class="tabs">
-<a href="/" class="tab">Main</a>
-<a href="/reviews" class="tab">Reviews</a>
-<a href="/video" class="tab">Video</a>
-<a href="/themes" class="tab active">Themes</a>
+<a href="/" class="tab">""" + ICON_MAIN + """ Main</a>
+<a href="/reviews" class="tab">""" + ICON_REVIEWS + """ Reviews</a>
+<a href="/video" class="tab">""" + ICON_VIDEO + """ Video</a>
+<a href="/themes" class="tab active">""" + ICON_THEMES + """ Themes</a>
+</div>
 </div>
 <main style="padding-top:16px;">
 {% if total == 0 %}
@@ -514,6 +720,7 @@ reflects everyone who's used this installation, not a personal account.</p>
 </div>
 {% endif %}
 </main>
+""" + BACK_TO_TOP_HTML + """
 </body>
 </html>"""
 
@@ -559,6 +766,7 @@ STORY_TEMPLATE = """<!doctype html>
 </a>
 {% endfor %}
 </main>
+""" + BACK_TO_TOP_HTML + """
 </body>
 </html>"""
 
@@ -602,6 +810,7 @@ def fetch_stories(tab, view):
             s.opencritic_score,
             s.opencritic_tier,
             s.read_at,
+            s.liked_at,
             count(*) AS n,
             count(*) FILTER (WHERE a.source_tier = 'trusted') AS trusted_n,
             count(*) FILTER (WHERE a.source_tier = 'niche') AS niche_n,
@@ -611,7 +820,7 @@ def fetch_stories(tab, view):
         JOIN articles a ON a.story_id = s.id
         WHERE 1=1 {tab_where}
         AND s.dismissed_at IS NULL
-        GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier, s.read_at
+        GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier, s.read_at, s.liked_at
         HAVING max(COALESCE(a.published_at, a.fetched_at)) > now() - interval '{FEED_WINDOW_DAYS} days'
         ORDER BY {order_by}
         LIMIT 30
@@ -654,6 +863,7 @@ def fetch_stories(tab, view):
             "opencritic_score": row["opencritic_score"],
             "opencritic_tier": row["opencritic_tier"],
             "is_read": row["read_at"] is not None,
+            "is_liked": row["liked_at"] is not None,
         })
 
     cur.execute("SELECT count(DISTINCT source) FROM articles")
@@ -789,6 +999,45 @@ def discard_story(story_id):
     cur.close()
     conn.close()
     return jsonify(ok=True)
+
+
+@app.route("/story/<int:story_id>/undiscard", methods=["POST"])
+def undiscard_story(story_id):
+    # Backs the Undo toast shown right after a discard - only meaningful
+    # within the short client-side grace window before the card actually
+    # leaves the DOM (see UNDO_WINDOW_MS and CARD_INTERACTIONS_JS).
+    conn = psycopg2.connect(DB_URL)
+    cur = conn.cursor()
+    cur.execute("UPDATE stories SET dismissed_at = NULL WHERE id = %s", (story_id,))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return jsonify(ok=True)
+
+
+@app.route("/story/<int:story_id>/like", methods=["POST"])
+def like_story(story_id):
+    # A toggle, not a one-way action - tapping again un-likes. Kept as its
+    # own explicit signal (liked_at) separate from read_at, since "opened
+    # this" and "actually liked this" are different strengths of signal
+    # for the Themes page's future interest-profile idea.
+    conn = psycopg2.connect(DB_URL)
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT liked_at FROM stories WHERE id = %s", (story_id,))
+    row = cur.fetchone()
+    if row is None:
+        cur.close()
+        conn.close()
+        return jsonify(ok=False), 404
+    liked = row["liked_at"] is None
+    cur.execute(
+        "UPDATE stories SET liked_at = %s WHERE id = %s",
+        (datetime.datetime.now(datetime.timezone.utc) if liked else None, story_id),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+    return jsonify(ok=True, liked=liked)
 
 
 @app.route("/story/<int:story_id>")
