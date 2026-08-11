@@ -14,6 +14,12 @@ Live at: http://bj5bgvbwfrf4z0xkuwjeph24.51.38.82.48.sslip.io/
 - **Clusters** articles about the same real-world story together (TF-IDF +
   cosine similarity), so a story covered by 4 outlets shows as one card
   with a "4 sources" coverage bar, not 4 separate entries
+- Shows a real **image** on every story card and detail page - hotlinked
+  to the outlet's own URL, never downloaded or re-hosted. Verified live
+  across all 25 sources before building: 14/14 press RSS and 7/7 YouTube
+  channels carry a real image; Reddit's `.rss` format has none at all.
+  On a multi-source story, the image comes from whichever source ranks
+  highest by trust tier - same rule already used for picking the synopsis
 - Colour-codes each source by **trust tier** - Trusted / Niche / Community
   - on every story card, so at a glance you can see whether something is
   backed by mainstream press or is a single Reddit post
@@ -31,11 +37,11 @@ Live at: http://bj5bgvbwfrf4z0xkuwjeph24.51.38.82.48.sslip.io/
   recommender - it shows patterns, it doesn't yet act on them. Tabs are
   filters over the same data, not silos - a video review shows up in both
   Reviews and Video
-- Stories a​ge out of the feed entirely after 2 days (`FEED_WINDOW_DAYS`
+- Stories age out of the feed entirely after 2 days (`FEED_WINDOW_DAYS`
   in `web/app.py`), regardless of read state - rows are never deleted,
   just filtered out of view, so the Themes page above still has the full
   history to work with
-- Read sories **dim in place** (opacity, not moved to a separate view) so
+- Read stories **dim in place** (opacity, not moved to a separate view) so
   you can see what you've already seen without losing your scroll
   position or needing a dedicated destination for it
 - **Discard** button on every card (top-left, 44×44pt tap target) to hide
@@ -95,9 +101,10 @@ Application resources with different Dockerfiles, even though both files
 live in the same repo/commit history.
 
 - **`ingest.py`** - long-running worker. Every 15 minutes: fetches all
-  sources (RSS, YouTube, Reddit), clusters recent articles into stories,
-  flags review and video titles, and (on its own slower hourly cadence,
-  budget-capped) looks up OpenCritic scores for reviews.
+  sources (RSS, YouTube, Reddit), extracts an image URL where available,
+  clusters recent articles into stories, flags review and video titles,
+  and (on its own slower hourly cadence, budget-capped) looks up
+  OpenCritic scores for reviews.
 - **`web/app.py`** - Flask app, server-rendered HTML (no frontend
   framework), reads the same database. Routes: `/`, `/reviews`,
   `/video`, `/themes`, plus `/story/<id>`.
@@ -107,12 +114,13 @@ personal-scale project. Postgres is the only shared state.
 
 ### Database
 
-Two tables: `articles` (raw ingested items, with `is_video` and
-`is_walkthrough` flags known unconditionally at ingestion) and `stories`
-(clusters, with review-score, video, and read/dismissed columns). Schema
-is created/migrated by `ensure_schema()` in `ingest.py` on every startup
-(idempotent `CREATE TABLE IF NOT EXISTS` / `ALTER TABLE ADD COLUMN IF NOT
-EXISTS`) - there's no separate migration tool.
+Two tables: `articles` (raw ingested items, with `is_video`,
+`is_walkthrough`, and `image_url` known unconditionally or extracted at
+ingestion) and `stories` (clusters, with review-score, video, and
+read/dismissed columns). Schema is created/migrated by `ensure_schema()`
+in `ingest.py` on every startup (idempotent `CREATE TABLE IF NOT EXISTS`
+/ `ALTER TABLE ADD COLUMN IF NOT EXISTS`) - there's no separate migration
+tool.
 
 **Read/discard state is two timestamp columns on `stories`**
 (`read_at`, `dismissed_at`). `read_at` only affects dimming in the feed
@@ -123,6 +131,14 @@ query filters by recency and dismissal state, the data itself persists
 for the Themes page. (An earlier `archived_at` column, added to support a
 since-removed separate Read tab, still exists in the schema but is no
 longer used by the app - harmless, not worth a migration to remove.)
+
+**`image_url` is hotlinked, never downloaded or re-hosted** - the same
+approach already used for article links. Because Postgres has no way to
+retroactively backfill a column for rows inserted before it existed, a
+one-off maintenance script re-fetched each source's current feed and
+filled in images for already-ingested recent articles that were still
+present there - not part of the regular ingestion loop, just a single run
+after adding the feature.
 
 ### External APIs
 
@@ -136,11 +152,14 @@ longer used by the app - harmless, not worth a migration to remove.)
   older Atom `.rss` feeds aren't subject to the same block, just normal
   rate limits (15s delay between Reddit requests specifically, longer than
   the 5s used for press/YouTube feeds, since Reddit proved more
-  rate-limit-sensitive as more subreddits were added).
+  rate-limit-sensitive as more subreddits were added). Carries no image
+  data at all - checked the full raw feed across two subreddits, not a
+  single missing entry, genuinely absent from the format.
 - **YouTube's channel RSS feeds** (`youtube.com/feeds/videos.xml?
   channel_id=...`) - no API key, no OAuth, no quota. The channel ID isn't
   the same as the `@handle` - find it via the `<link rel="alternate"
-  type="application/rss+xml">` tag on the channel's page.
+  type="application/rss+xml">` tag on the channel's page. Every entry
+  reliably includes a `media:thumbnail`.
 
 ## Known limitations (accepted tradeoffs, not bugs)
 
@@ -171,6 +190,10 @@ longer used by the app - harmless, not worth a migration to remove.)
   it doesn't (yet) change what the feed shows you based on it. Deliberate
   scope choice: validate the signal is meaningful before building
   anything that acts on it.
+- **Not every article has an image**, even from sources that generally
+  carry them - some individual RSS entries genuinely lack a thumbnail in
+  the source feed itself. Cards and detail pages simply show no image
+  slot in that case rather than a broken one.
 
 ## Local operational notes
 
@@ -193,6 +216,12 @@ Check source health:
 SELECT source, count(*) FROM articles GROUP BY source ORDER BY source;
 ```
 
+Check image coverage within the live feed window:
+```sql
+SELECT count(*) AS total, count(image_url) AS with_image FROM articles
+WHERE COALESCE(published_at, fetched_at) > now() - interval '2 days';
+```
+
 Note: `docker logs` / Coolify's log viewer can show "No logs yet" even
 when the ingestion script is actively running - Python's `print()` is
 buffered when stdout isn't a real terminal, and `PYTHONUNBUFFERED=1` is
@@ -204,3 +233,9 @@ limit cleared up" - each restart triggers a fresh run that hits the same
 rate-limited source again, adding to the exact problem being diagnosed.
 Fix the code once, ship it, and let the next natural 15-minute cycle
 confirm it.
+
+If a newly-deployed field looks wrong on a sample of "recent" rows,
+double-check the actual timestamp cutoff before assuming a code bug -
+`ON CONFLICT (url) DO NOTHING` means pre-deploy rows can look like
+false negatives forever. Verify the underlying function directly against
+live data before concluding something's broken.
