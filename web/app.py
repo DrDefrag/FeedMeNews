@@ -18,6 +18,8 @@ DB_URL = os.environ["DATABASE_URL"]
 # window, so nothing is lost for the themes page below. Read state only
 # affects dimming (is_read below), not whether a story is in the window
 # at all - a read story ages out exactly the same way an unread one does.
+# Search (below) deliberately ignores this window entirely - see
+# fetch_search_results for why.
 FEED_WINDOW_DAYS = 2
 
 # Seconds a discarded card stays in the DOM (dimmed) before actually being
@@ -39,6 +41,7 @@ UNDO_WINDOW_MS = 5000
 # a niche game, one channel covering something), so filtering those the
 # same way would throw out real content, not noise. Nothing is hidden
 # permanently - a plain link reveals every story, single-source included.
+# Not applied to search either, for the same reason.
 MIN_SOURCES_DEFAULT = 2
 
 # How many items each horizontal rail shows (added 11 Aug 2026, inspired
@@ -77,6 +80,7 @@ ICON_THEMES = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path 
 ICON_X = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"></line><line x1="18" y1="6" x2="6" y2="18"></line></svg>'
 ICON_HEART = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.8 1-1a5.5 5.5 0 0 0 0-7.8z"></path></svg>'
 ICON_UP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="6 11 12 5 18 11"></polyline></svg>'
+ICON_SEARCH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>'
 
 
 CSS = """
@@ -139,6 +143,10 @@ header {
 padding: 20px 16px 12px;
 max-width: 640px;
 margin: 0 auto;
+display: flex;
+justify-content: space-between;
+align-items: flex-start;
+gap: 12px;
 }
 header h1 {
 font-size: 20px;
@@ -149,6 +157,37 @@ header p {
 font-size: 13px;
 color: var(--text-secondary);
 margin: 0;
+}
+.search-icon-btn {
+width: 36px;
+height: 36px;
+border-radius: 50%;
+background: var(--border);
+color: var(--text-secondary);
+display: flex;
+align-items: center;
+justify-content: center;
+flex-shrink: 0;
+margin-top: 2px;
+}
+.search-icon-btn svg { width: 17px; height: 17px; }
+.search-form {
+padding: 8px 16px 12px;
+max-width: 640px;
+margin: 0 auto;
+}
+.search-input {
+width: 100%;
+padding: 11px 14px;
+border-radius: 10px;
+border: 1px solid var(--border);
+background: var(--card);
+color: var(--text);
+font-size: 15px;
+}
+.search-input:focus {
+outline: none;
+border-color: var(--text-secondary);
 }
 .sticky-nav {
 position: sticky;
@@ -712,6 +751,16 @@ BACK_TO_TOP_HTML = """
 </script>
 """
 
+HEADER_HTML = """
+<header>
+<div>
+<h1>FeedMeNews</h1>
+<p>Gaming coverage across {{ source_count }} sources, grouped by story</p>
+</div>
+<a href="/search" class="search-icon-btn" aria-label="Search">""" + ICON_SEARCH + """</a>
+</header>
+"""
+
 TABS_HTML = """
 <div class="tabs">
 <a href="/" class="tab {{ 'active' if active_tab == 'main' else '' }}">""" + ICON_MAIN + """ Main</a>
@@ -777,42 +826,7 @@ RAILS_HTML = """
 {% endif %}
 """
 
-FEED_TEMPLATE = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>FeedMeNews</title>
-<style>""" + CSS + """</style>
-</head>
-<body>
-<header>
-<h1>FeedMeNews</h1>
-<p>Gaming coverage across {{ source_count }} sources, grouped by story</p>
-</header>
-<div class="sticky-nav">
-""" + TABS_HTML + """
-<div class="segmented">
-<a href="{{ recent_url }}" class="segmented-option {{ 'active' if view == 'recent' else '' }}">Most recent</a>
-<a href="{{ covered_url }}" class="segmented-option {{ 'active' if view == 'covered' else '' }}">Most covered</a>
-</div>
-</div>
-{% if show_filter_toggle %}
-<div class="filter-toggle">
-{% if show_all %}
-Showing every story &middot; <a href="{{ toggle_url }}">Show 2+ sources only</a>
-{% else %}
-Showing stories with 2+ sources{% if hidden_count %} &middot; {{ hidden_count }} single-source hidden{% endif %} &middot; <a href="{{ toggle_url }}">Show all</a>
-{% endif %}
-</div>
-{% endif %}
-<div class="legend">
-<span><span class="dot" style="background:var(--trust)"></span>Trusted</span>
-<span><span class="dot" style="background:var(--niche)"></span>Niche</span>
-<span><span class="dot" style="background:var(--comm)"></span>Community</span>
-</div>
-<main>
-""" + RAILS_HTML + """
+STORY_CARD_LOOP_HTML = """
 {% for story in stories %}
 <div class="card {{ 'read' if story.is_read else '' }}">
 <button class="discard-btn" data-action="/story/{{ story.id }}/discard" data-id="{{ story.id }}" aria-label="Discard">""" + ICON_X + """</button>
@@ -842,6 +856,41 @@ Showing stories with 2+ sources{% if hidden_count %} &middot; {{ hidden_count }}
 {% if not stories %}
 <p class="meta">Nothing here yet.</p>
 {% endif %}
+"""
+
+FEED_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FeedMeNews</title>
+<style>""" + CSS + """</style>
+</head>
+<body>
+""" + HEADER_HTML + """
+<div class="sticky-nav">
+""" + TABS_HTML + """
+<div class="segmented">
+<a href="{{ recent_url }}" class="segmented-option {{ 'active' if view == 'recent' else '' }}">Most recent</a>
+<a href="{{ covered_url }}" class="segmented-option {{ 'active' if view == 'covered' else '' }}">Most covered</a>
+</div>
+</div>
+{% if show_filter_toggle %}
+<div class="filter-toggle">
+{% if show_all %}
+Showing every story &middot; <a href="{{ toggle_url }}">Show 2+ sources only</a>
+{% else %}
+Showing stories with 2+ sources{% if hidden_count %} &middot; {{ hidden_count }} single-source hidden{% endif %} &middot; <a href="{{ toggle_url }}">Show all</a>
+{% endif %}
+</div>
+{% endif %}
+<div class="legend">
+<span><span class="dot" style="background:var(--trust)"></span>Trusted</span>
+<span><span class="dot" style="background:var(--niche)"></span>Niche</span>
+<span><span class="dot" style="background:var(--comm)"></span>Community</span>
+</div>
+<main>
+""" + RAILS_HTML + STORY_CARD_LOOP_HTML + """
 </main>
 """ + CARD_INTERACTIONS_JS + BACK_TO_TOP_HTML + """
 </body>
@@ -856,10 +905,7 @@ THEMES_TEMPLATE = """<!doctype html>
 <style>""" + CSS + """</style>
 </head>
 <body>
-<header>
-<h1>FeedMeNews</h1>
-<p>Gaming coverage across {{ source_count }} sources, grouped by story</p>
-</header>
+""" + HEADER_HTML + """
 <div class="sticky-nav">
 <div class="tabs">
 <a href="/" class="tab">""" + ICON_MAIN + """ Main</a>
@@ -906,6 +952,32 @@ reflects everyone who's used this installation, not a personal account.</p>
 {% endif %}
 </main>
 """ + BACK_TO_TOP_HTML + """
+</body>
+</html>"""
+
+SEARCH_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Search - FeedMeNews</title>
+<style>""" + CSS + """</style>
+</head>
+<body>
+""" + HEADER_HTML + """
+<div class="sticky-nav">
+""" + TABS_HTML + """
+<form class="search-form" action="/search" method="get">
+<input type="text" name="q" value="{{ query }}" placeholder="Search all stories, ever posted..." class="search-input" autofocus>
+</form>
+</div>
+<main style="padding-top:16px;">
+{% if query %}
+<p class="meta">{{ stories|length }} result{{ 's' if stories|length != 1 else '' }} for "{{ query }}"</p>
+{% endif %}
+""" + STORY_CARD_LOOP_HTML + """
+</main>
+""" + CARD_INTERACTIONS_JS + BACK_TO_TOP_HTML + """
 </body>
 </html>"""
 
@@ -1174,6 +1246,109 @@ def fetch_stories(tab, view, show_all=False):
     return stories, source_count, hidden_count
 
 
+def fetch_search_results(query):
+    """Full-text search over story titles, spanning all history - no
+    FEED_WINDOW_DAYS limit and no MIN_SOURCES_DEFAULT filter, deliberately.
+    Search is a different use case from the feed: the feed answers "what's
+    fresh right now," search answers "I remember seeing something about
+    this, where did it go" - filtering search results by recency or
+    coverage count would work against exactly what it's for. Dismissed
+    stories are still excluded (an explicit "not interested" shouldn't be
+    resurrected by search), but read stories are included (dimmed, same as
+    everywhere else) since a read story is exactly the kind of thing
+    you'd search for.
+
+    Uses Postgres's built-in full-text search (to_tsvector/plainto_tsquery)
+    rather than a plain ILIKE substring match - real relevance ranking and
+    basic stemming ("review" matches "reviewed") for zero new
+    infrastructure. tsvector is computed on the fly rather than stored in
+    a column - at our current scale (low thousands of rows) a sequential
+    scan is fast enough that a persisted/indexed column isn't needed yet;
+    worth revisiting only if search ever feels slow in practice.
+
+    v1 scope is story titles only, not article titles/summaries - a
+    deliberate choice to ship a smaller, simpler thing first and expand
+    recall later if it feels too narrow.
+    """
+    query = (query or "").strip()
+
+    conn = psycopg2.connect(DB_URL)
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    stories = []
+    if query:
+        cur.execute(
+            """
+            SELECT
+                s.id,
+                s.title,
+                s.opencritic_score,
+                s.opencritic_tier,
+                s.read_at,
+                s.liked_at,
+                count(*) AS n,
+                count(*) FILTER (WHERE a.source_tier = 'trusted') AS trusted_n,
+                count(*) FILTER (WHERE a.source_tier = 'niche') AS niche_n,
+                count(*) FILTER (WHERE a.source_tier = 'community') AS community_n,
+                max(COALESCE(a.published_at, a.fetched_at)) AS latest,
+                ts_rank(to_tsvector('english', s.title), plainto_tsquery('english', %s)) AS rank
+            FROM stories s
+            JOIN articles a ON a.story_id = s.id
+            WHERE s.dismissed_at IS NULL
+            AND to_tsvector('english', s.title) @@ plainto_tsquery('english', %s)
+            GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier, s.read_at, s.liked_at
+            ORDER BY rank DESC, latest DESC
+            LIMIT 40
+            """,
+            (query, query),
+        )
+        story_rows = cur.fetchall()
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        for row in story_rows:
+            cur.execute(
+                "SELECT DISTINCT source, source_tier FROM articles WHERE story_id = %s ORDER BY source",
+                (row["id"],),
+            )
+            sources = [(r["source"], r["source_tier"]) for r in cur.fetchall()]
+
+            cur.execute(
+                f"""
+                SELECT image_url FROM articles
+                WHERE story_id = %s AND image_url IS NOT NULL
+                ORDER BY {TIER_RANK_SQL}
+                LIMIT 1
+                """,
+                (row["id"],),
+            )
+            image_row = cur.fetchone()
+            image_url = image_row["image_url"] if image_row else None
+
+            delta = (now - row["latest"]).total_seconds() if row["latest"] else 0
+            stories.append({
+                "id": row["id"],
+                "title": row["title"],
+                "n": row["n"],
+                "trusted_n": row["trusted_n"],
+                "niche_n": row["niche_n"],
+                "community_n": row["community_n"],
+                "sources": sources,
+                "image_url": image_url,
+                "time_ago": humanize(delta),
+                "opencritic_score": row["opencritic_score"],
+                "opencritic_tier": row["opencritic_tier"],
+                "is_read": row["read_at"] is not None,
+                "is_liked": row["liked_at"] is not None,
+            })
+
+    cur.execute("SELECT count(DISTINCT source) FROM articles")
+    source_count = cur.fetchone()["count"]
+
+    cur.close()
+    conn.close()
+    return stories, source_count
+
+
 @app.route("/")
 def index():
     view = valid_view()
@@ -1228,6 +1403,17 @@ def video():
         toggle_url=None,
         show_filter_toggle=False,
         show_rails=False, trending=None, review_rail=None, video_rail=None,
+    )
+
+
+@app.route("/search")
+def search():
+    query = request.args.get("q", "")
+    stories, source_count = fetch_search_results(query)
+    return render_template_string(
+        SEARCH_TEMPLATE,
+        stories=stories, source_count=source_count, query=query.strip(),
+        active_tab=None,
     )
 
 
