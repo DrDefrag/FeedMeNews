@@ -41,6 +41,13 @@ UNDO_WINDOW_MS = 5000
 # permanently - a plain link reveals every story, single-source included.
 MIN_SOURCES_DEFAULT = 2
 
+# How many items each horizontal rail shows (added 11 Aug 2026, inspired
+# by Ground News's homepage rails). Rails are a preview/teaser, not a
+# replacement for the full Reviews/Video tabs - deliberately kept short
+# with a "See all" link through to the real thing, rather than trying to
+# cram full browsability into a scroll strip.
+RAIL_LIMIT = 8
+
 # Small inline stopword list for the themes word-frequency stat - kept
 # separate from ingest.py's clustering stopwords deliberately, since the
 # two services don't share code or dependencies (no sklearn in the web
@@ -242,6 +249,75 @@ main {
 max-width: 640px;
 margin: 0 auto;
 padding: 0 16px 40px;
+}
+.rail-section {
+margin-bottom: 22px;
+}
+.rail-header {
+display: flex;
+justify-content: space-between;
+align-items: baseline;
+margin-bottom: 10px;
+}
+.rail-title {
+font-size: 15px;
+font-weight: 700;
+}
+.rail-see-all {
+font-size: 13px;
+color: var(--text-secondary);
+text-decoration: underline;
+}
+.rail-scroll {
+display: flex;
+gap: 10px;
+overflow-x: auto;
+margin: 0 -16px;
+padding: 0 16px 6px;
+scroll-snap-type: x proximity;
+-webkit-overflow-scrolling: touch;
+}
+.rail-card {
+flex: 0 0 auto;
+width: 158px;
+scroll-snap-align: start;
+display: block;
+background: var(--card);
+border: 1px solid var(--border);
+border-radius: 12px;
+overflow: hidden;
+}
+.rail-card-image {
+display: block;
+width: 100%;
+height: 88px;
+object-fit: cover;
+background: var(--border);
+}
+.rail-card-body {
+padding: 9px 10px 11px;
+}
+.rail-card-title {
+font-size: 12.5px;
+font-weight: 600;
+line-height: 1.35;
+margin: 0 0 5px;
+display: -webkit-box;
+-webkit-line-clamp: 3;
+-webkit-box-orient: vertical;
+overflow: hidden;
+}
+.rail-card-meta {
+font-size: 11px;
+color: var(--text-secondary);
+}
+.rail-score-chip {
+font-size: 11px;
+font-weight: 700;
+padding: 2px 8px;
+border-radius: 20px;
+display: inline-block;
+margin-bottom: 6px;
 }
 .card {
 position: relative;
@@ -645,6 +721,62 @@ TABS_HTML = """
 </div>
 """
 
+RAILS_HTML = """
+{% if show_rails %}
+{% if trending %}
+<div class="rail-section">
+<div class="rail-header"><span class="rail-title">Trending</span></div>
+<div class="rail-scroll">
+{% for item in trending %}
+<a class="rail-card" href="/story/{{ item.id }}">
+{% if item.image_url %}<img class="rail-card-image" src="{{ item.image_url }}" loading="lazy" alt="">{% endif %}
+<div class="rail-card-body">
+<p class="rail-card-title">{{ item.title }}</p>
+<p class="rail-card-meta">{{ item.n }} source{{ 's' if item.n != 1 else '' }} &middot; {{ item.time_ago }}</p>
+</div>
+</a>
+{% endfor %}
+</div>
+</div>
+{% endif %}
+{% if review_rail %}
+<div class="rail-section">
+<div class="rail-header"><span class="rail-title">Latest reviews</span><a class="rail-see-all" href="/reviews">See all &rarr;</a></div>
+<div class="rail-scroll">
+{% for item in review_rail %}
+<a class="rail-card" href="/story/{{ item.id }}">
+{% if item.image_url %}<img class="rail-card-image" src="{{ item.image_url }}" loading="lazy" alt="">{% endif %}
+<div class="rail-card-body">
+{% if item.opencritic_score and item.opencritic_score > 0 %}
+<span class="rail-score-chip" style="background:var(--{{ (item.opencritic_tier or 'strong')|lower }}-bg); color:var(--{{ (item.opencritic_tier or 'strong')|lower }}-fg);">{{ item.opencritic_score|round|int }}</span><br>
+{% endif %}
+<p class="rail-card-title">{{ item.title }}</p>
+<p class="rail-card-meta">{{ item.time_ago }}</p>
+</div>
+</a>
+{% endfor %}
+</div>
+</div>
+{% endif %}
+{% if video_rail %}
+<div class="rail-section">
+<div class="rail-header"><span class="rail-title">New video</span><a class="rail-see-all" href="/video">See all &rarr;</a></div>
+<div class="rail-scroll">
+{% for item in video_rail %}
+<a class="rail-card" href="/story/{{ item.id }}">
+{% if item.image_url %}<img class="rail-card-image" src="{{ item.image_url }}" loading="lazy" alt="">{% endif %}
+<div class="rail-card-body">
+<p class="rail-card-title">{{ item.title }}</p>
+<p class="rail-card-meta">{{ item.time_ago }}</p>
+</div>
+</a>
+{% endfor %}
+</div>
+</div>
+{% endif %}
+{% endif %}
+"""
+
 FEED_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
@@ -680,6 +812,7 @@ Showing stories with 2+ sources{% if hidden_count %} &middot; {{ hidden_count }}
 <span><span class="dot" style="background:var(--comm)"></span>Community</span>
 </div>
 <main>
+""" + RAILS_HTML + """
 {% for story in stories %}
 <div class="card {{ 'read' if story.is_read else '' }}">
 <button class="discard-btn" data-action="/story/{{ story.id }}/discard" data-id="{{ story.id }}" aria-label="Discard">""" + ICON_X + """</button>
@@ -857,6 +990,74 @@ def build_url(base_path, view="recent", show_all=False):
     return base_path + "?" + "&".join(params)
 
 
+def fetch_rail(kind):
+    """A short, glanceable preview strip for the Main page - inspired by
+    Ground News's homepage rails. Deliberately not a replacement for the
+    full Reviews/Video tabs: short (RAIL_LIMIT items), no discard/like
+    interactions, just a teaser with a "See all" link through to the
+    real thing. "trending" spans all content types, sorted purely by
+    how many independent sources are on a story - the same signal
+    "Most covered" already sorts by, just surfaced automatically instead
+    of requiring the user to go choose that view.
+    """
+    if kind == "reviews":
+        tab_where = "AND s.is_review = TRUE"
+        order_by = "latest DESC"
+    elif kind == "video":
+        tab_where = "AND s.is_video = TRUE"
+        order_by = "latest DESC"
+    else:
+        tab_where = ""
+        order_by = "n DESC, latest DESC"
+
+    conn = psycopg2.connect(DB_URL)
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(
+        f"""
+        SELECT s.id, s.title, s.opencritic_score, s.opencritic_tier,
+            count(*) AS n,
+            max(COALESCE(a.published_at, a.fetched_at)) AS latest
+        FROM stories s
+        JOIN articles a ON a.story_id = s.id
+        WHERE 1=1 {tab_where}
+        AND s.dismissed_at IS NULL
+        GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier
+        HAVING max(COALESCE(a.published_at, a.fetched_at)) > now() - interval '{FEED_WINDOW_DAYS} days'
+        ORDER BY {order_by}
+        LIMIT {RAIL_LIMIT}
+        """
+    )
+    rows = cur.fetchall()
+
+    items = []
+    now = datetime.datetime.now(datetime.timezone.utc)
+    for row in rows:
+        cur.execute(
+            f"""
+            SELECT image_url FROM articles
+            WHERE story_id = %s AND image_url IS NOT NULL
+            ORDER BY {TIER_RANK_SQL}
+            LIMIT 1
+            """,
+            (row["id"],),
+        )
+        image_row = cur.fetchone()
+        delta = (now - row["latest"]).total_seconds() if row["latest"] else 0
+        items.append({
+            "id": row["id"],
+            "title": row["title"],
+            "n": row["n"],
+            "image_url": image_row["image_url"] if image_row else None,
+            "time_ago": humanize(delta),
+            "opencritic_score": row["opencritic_score"],
+            "opencritic_tier": row["opencritic_tier"],
+        })
+
+    cur.close()
+    conn.close()
+    return items
+
+
 def fetch_stories(tab, view, show_all=False):
     if tab == "reviews":
         tab_where = "AND s.is_review = TRUE"
@@ -971,6 +1172,9 @@ def index():
     view = valid_view()
     show_all = valid_show_all()
     stories, source_count, hidden_count = fetch_stories(tab="main", view=view, show_all=show_all)
+    trending = fetch_rail("trending")
+    review_rail = fetch_rail("reviews")
+    video_rail = fetch_rail("video")
     return render_template_string(
         FEED_TEMPLATE, stories=stories, source_count=source_count,
         active_tab="main", view=view, show_all=show_all, hidden_count=hidden_count,
@@ -978,6 +1182,7 @@ def index():
         covered_url=build_url("/", view="covered", show_all=show_all),
         toggle_url=build_url("/", view=view, show_all=not show_all),
         show_filter_toggle=True,
+        show_rails=True, trending=trending, review_rail=review_rail, video_rail=video_rail,
     )
 
 
@@ -992,6 +1197,7 @@ def reviews():
         covered_url=build_url("/reviews", view="covered"),
         toggle_url=None,
         show_filter_toggle=False,
+        show_rails=False, trending=None, review_rail=None, video_rail=None,
     )
 
 
@@ -1006,6 +1212,7 @@ def video():
         covered_url=build_url("/video", view="covered"),
         toggle_url=None,
         show_filter_toggle=False,
+        show_rails=False, trending=None, review_rail=None, video_rail=None,
     )
 
 
