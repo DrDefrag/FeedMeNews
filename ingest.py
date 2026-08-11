@@ -171,6 +171,13 @@ def ensure_schema(conn):
         # We hotlink the outlet's own URL here, never download or
         # re-host the actual image file ourselves.
         cur.execute("ALTER TABLE articles ADD COLUMN IF NOT EXISTS image_url TEXT;")
+        # liked_at (added 11 Aug 2026). A third explicit signal alongside
+        # read_at (passive click-through) and dismissed_at (explicit
+        # negative) - an explicit positive signal, toggled via a Like
+        # button on each feed card. Stronger training data for the
+        # Themes page's future interest-profile idea than read_at alone,
+        # since opening something isn't the same as actually liking it.
+        cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS liked_at TIMESTAMPTZ;")
     conn.commit()
 
 
