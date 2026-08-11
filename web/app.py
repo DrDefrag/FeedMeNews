@@ -1,12 +1,37 @@
 import os
 import re
 import datetime
+from collections import Counter
 import psycopg2
 import psycopg2.extras
 from flask import Flask, render_template_string, request, jsonify
 
 app = Flask(__name__)
 DB_URL = os.environ["DATABASE_URL"]
+
+# How long a story stays visible in the feed at all, read or not - agreed
+# with the user on 10 Aug 2026 after the separate "Read" tab turned out not
+# to be useful in practice. Nothing is deleted from the database, this is
+# purely a display-side filter (HAVING clause on latest activity) - the
+# underlying rows stay around for the Themes page below and any future use.
+FEED_WINDOW_DAYS = 2
+
+# Plain English stopwords plus a few gaming-news boilerplate terms, for the
+# Themes page's keyword extraction. Deliberately not reusing ingest.py's
+# sklearn-based STOPWORDS - the web app has no ML dependency today and this
+# doesn't need one; a plain word-frequency count over a few dozen titles is
+# simple enough without it.
+KEYWORD_STOPWORDS = {
+    "the", "a", "an", "of", "in", "on", "at", "to", "for", "with", "and",
+    "or", "is", "are", "was", "were", "be", "been", "this", "that", "its",
+    "it's", "from", "as", "by", "new", "review", "reviews", "trailer",
+    "gameplay", "launch", "launches", "release", "official", "date",
+    "announcement", "announced", "update", "after", "how", "why", "what",
+    "your", "you", "we", "our", "their", "his", "her", "have", "has",
+    "had", "will", "can", "could", "would", "just", "more", "than",
+    "into", "about", "over", "up", "down", "out", "not", "no", "yes",
+    "get", "gets", "first", "still", "now", "all", "one", "here",
+}
 
 CSS = """
 :root {
@@ -81,16 +106,16 @@ margin: 0;
 }
 .tabs {
 display: flex;
-gap: 4px;
+gap: 2px;
 padding: 4px 16px 0;
 max-width: 640px;
 margin: 0 auto;
 border-bottom: 1px solid var(--border);
 }
 .tab {
-font-size: 14px;
+font-size: 13.5px;
 font-weight: 600;
-padding: 8px 12px;
+padding: 8px 10px;
 border-radius: 8px 8px 0 0;
 color: var(--text-secondary);
 }
@@ -144,6 +169,9 @@ border-radius: 14px;
 padding: 16px;
 margin-bottom: 14px;
 transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.card.read {
+opacity: 0.55;
 }
 .card-link {
 display: block;
@@ -287,6 +315,44 @@ margin: 22px 0 10px;
 text-transform: uppercase;
 letter-spacing: 0.04em;
 }
+.theme-card {
+background: var(--card);
+border: 1px solid var(--border);
+border-radius: 14px;
+padding: 16px;
+margin-bottom: 14px;
+}
+.theme-card h3 {
+font-size: 12px;
+font-weight: 600;
+color: var(--text-secondary);
+margin: 0 0 12px;
+text-transform: uppercase;
+letter-spacing: 0.04em;
+}
+.stat-line {
+display: flex;
+justify-content: space-between;
+font-size: 14px;
+margin-bottom: 8px;
+}
+.stat-line:last-child {
+margin-bottom: 0;
+}
+.stat-line .n {
+font-weight: 600;
+color: var(--text-secondary);
+}
+.keyword-chip {
+font-size: 13px;
+font-weight: 600;
+padding: 5px 12px;
+border-radius: 20px;
+background: var(--border);
+color: var(--text);
+display: inline-block;
+margin: 0 6px 6px 0;
+}
 """
 
 DISCARD_JS = """
@@ -309,6 +375,15 @@ document.addEventListener("click", function (e) {
 </script>
 """
 
+TABS_HTML = """
+<div class="tabs">
+<a href="/" class="tab {{ 'active' if active_tab == 'main' else '' }}">Main</a>
+<a href="/reviews" class="tab {{ 'active' if active_tab == 'reviews' else '' }}">Reviews</a>
+<a href="/video" class="tab {{ 'active' if active_tab == 'video' else '' }}">Video</a>
+<a href="/themes" class="tab {{ 'active' if active_tab == 'themes' else '' }}">Themes</a>
+</div>
+"""
+
 FEED_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
@@ -322,15 +397,10 @@ FEED_TEMPLATE = """<!doctype html>
 <h1>FeedMeNews</h1>
 <p>Gaming coverage across {{ source_count }} sources, grouped by story</p>
 </header>
-<div class="tabs">
-<a href="/" class="tab {{ 'active' if active_tab == 'main' else '' }}">Main</a>
-<a href="/reviews" class="tab {{ 'active' if active_tab == 'reviews' else '' }}">Reviews</a>
-<a href="/video" class="tab {{ 'active' if active_tab == 'video' else '' }}">Video</a>
-</div>
+""" + TABS_HTML + """
 <div class="view-row">
 <a href="{{ base_path }}" class="view-link {{ 'active' if view == 'recent' else '' }}">Most recent</a>
 <a href="{{ base_path }}?view=covered" class="view-link {{ 'active' if view == 'covered' else '' }}">Most covered</a>
-<a href="{{ base_path }}?view=read" class="view-link {{ 'active' if view == 'read' else '' }}">Read</a>
 </div>
 <div class="legend">
 <span><span class="dot" style="background:var(--trust)"></span>Trusted</span>
@@ -339,19 +409,14 @@ FEED_TEMPLATE = """<!doctype html>
 </div>
 <main>
 {% for story in stories %}
-<div class="card">
-<button class="discard-btn" data-action="/story/{{ story.id }}/{{ 'archive' if view == 'read' else 'discard' }}" aria-label="{{ 'Remove' if view == 'read' else 'Discard' }}">&times;</button>
+<div class="card{{ ' read' if story.read_at else '' }}">
+<button class="discard-btn" data-action="/story/{{ story.id }}/discard" aria-label="Discard">&times;</button>
 <a class="card-link with-discard" href="/story/{{ story.id }}">
-{% if view == 'read' %}
-<h2>{{ story.title }}</h2>
-<p class="meta">{{ story.n }} source{{ 's' if story.n != 1 else '' }} &middot; {{ 'Discarded' if story.was_discarded_only else 'Read' }} {{ story.interaction_ago }}</p>
-{% else %}
 {% if story.opencritic_score and story.opencritic_score > 0 %}
 <span class="score-chip" style="background:var(--{{ (story.opencritic_tier or 'strong')|lower }}-bg); color:var(--{{ (story.opencritic_tier or 'strong')|lower }}-fg);">{{ story.opencritic_score|round|int }}{% if story.opencritic_tier %} &middot; {{ story.opencritic_tier }}{% endif %}</span><br>
 {% endif %}
 <h2>{{ story.title }}</h2>
 <p class="meta">{{ story.n }} source{{ 's' if story.n != 1 else '' }} &middot; {{ story.time_ago }}</p>
-{% endif %}
 <div class="bar">
 {% if story.trusted_n %}<div style="flex:{{ story.trusted_n }};background:var(--trust);"></div>{% endif %}
 {% if story.niche_n %}<div style="flex:{{ story.niche_n }};background:var(--niche);"></div>{% endif %}
@@ -370,6 +435,67 @@ FEED_TEMPLATE = """<!doctype html>
 {% endif %}
 </main>
 """ + DISCARD_JS + """
+</body>
+</html>"""
+
+THEMES_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Themes - FeedMeNews</title>
+<style>""" + CSS + """</style>
+</head>
+<body>
+<header>
+<h1>FeedMeNews</h1>
+<p>Gaming coverage across {{ source_count }} sources, grouped by story</p>
+</header>
+""" + TABS_HTML + """
+<main style="padding-top:16px;">
+{% if total_read == 0 %}
+<p class="meta">Nothing here yet - read a few stories and check back. This
+page reflects a single shared reading history for this installation, not
+a personal profile yet (no accounts exist here).</p>
+{% else %}
+<p class="meta" style="margin-bottom:18px;">Based on {{ total_read }} story{{ 's' if total_read != 1 else '' }} you've read. One shared history for this installation for now, not a personal profile - no accounts exist yet.</p>
+
+<div class="theme-card">
+<h3>Coverage tier</h3>
+<div class="bar" style="margin-bottom:12px;">
+{% if tier_counts.trusted %}<div style="flex:{{ tier_counts.trusted }};background:var(--trust);"></div>{% endif %}
+{% if tier_counts.niche %}<div style="flex:{{ tier_counts.niche }};background:var(--niche);"></div>{% endif %}
+{% if tier_counts.community %}<div style="flex:{{ tier_counts.community }};background:var(--comm);"></div>{% endif %}
+</div>
+<div class="stat-line"><span>Trusted</span><span class="n">{{ tier_counts.trusted or 0 }}</span></div>
+<div class="stat-line"><span>Niche</span><span class="n">{{ tier_counts.niche or 0 }}</span></div>
+<div class="stat-line"><span>Community</span><span class="n">{{ tier_counts.community or 0 }}</span></div>
+</div>
+
+<div class="theme-card">
+<h3>Content type</h3>
+<div class="stat-line"><span>Reviews</span><span class="n">{{ review_n }}</span></div>
+<div class="stat-line"><span>Video</span><span class="n">{{ video_n }}</span></div>
+<div class="stat-line"><span>General news</span><span class="n">{{ total_read - review_n - video_n if total_read - review_n - video_n > 0 else 0 }}</span></div>
+</div>
+
+<div class="theme-card">
+<h3>Top outlets</h3>
+{% for outlet in top_outlets %}
+<div class="stat-line"><span>{{ outlet.source }}</span><span class="n">{{ outlet.n }}</span></div>
+{% endfor %}
+</div>
+
+{% if keywords %}
+<div class="theme-card">
+<h3>Frequently appearing words</h3>
+{% for word, count in keywords %}
+<span class="keyword-chip">{{ word }}</span>
+{% endfor %}
+</div>
+{% endif %}
+{% endif %}
+</main>
 </body>
 </html>"""
 
@@ -432,7 +558,17 @@ def strip_html(text):
 
 def valid_view():
     v = request.args.get("view", "recent")
-    return v if v in ("recent", "covered", "read") else "recent"
+    return v if v in ("recent", "covered") else "recent"
+
+
+def top_keywords(titles, limit=10):
+    counts = Counter()
+    for t in titles:
+        for word in re.findall(r"[a-zA-Z']+", t.lower()):
+            if len(word) < 3 or word in KEYWORD_STOPWORDS:
+                continue
+            counts[word] += 1
+    return counts.most_common(limit)
 
 
 def fetch_stories(tab, view):
@@ -443,12 +579,7 @@ def fetch_stories(tab, view):
     else:
         tab_where = "AND s.is_review = FALSE AND s.is_video = FALSE"
 
-    if view == "read":
-        where_extra = f"{tab_where} AND (s.read_at IS NOT NULL OR s.dismissed_at IS NOT NULL) AND s.archived_at IS NULL"
-        order_by = "COALESCE(s.read_at, s.dismissed_at) DESC"
-    else:
-        where_extra = f"{tab_where} AND s.read_at IS NULL AND s.dismissed_at IS NULL"
-        order_by = "n DESC, latest DESC" if view == "covered" else "latest DESC"
+    order_by = "n DESC, latest DESC" if view == "covered" else "latest DESC"
 
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -460,7 +591,6 @@ def fetch_stories(tab, view):
             s.opencritic_score,
             s.opencritic_tier,
             s.read_at,
-            s.dismissed_at,
             count(*) AS n,
             count(*) FILTER (WHERE a.source_tier = 'trusted') AS trusted_n,
             count(*) FILTER (WHERE a.source_tier = 'niche') AS niche_n,
@@ -468,8 +598,9 @@ def fetch_stories(tab, view):
             max(COALESCE(a.published_at, a.fetched_at)) AS latest
         FROM stories s
         JOIN articles a ON a.story_id = s.id
-        WHERE 1=1 {where_extra}
-        GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier, s.read_at, s.dismissed_at
+        WHERE 1=1 {tab_where} AND s.dismissed_at IS NULL
+        GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier, s.read_at
+        HAVING max(COALESCE(a.published_at, a.fetched_at)) > now() - interval '{FEED_WINDOW_DAYS} days'
         ORDER BY {order_by}
         LIMIT 30
         """
@@ -485,7 +616,6 @@ def fetch_stories(tab, view):
         )
         sources = [(r["source"], r["source_tier"]) for r in cur.fetchall()]
         delta = (now - row["latest"]).total_seconds() if row["latest"] else 0
-        interaction_time = row["read_at"] or row["dismissed_at"]
         stories.append({
             "id": row["id"],
             "title": row["title"],
@@ -497,8 +627,7 @@ def fetch_stories(tab, view):
             "time_ago": humanize(delta),
             "opencritic_score": row["opencritic_score"],
             "opencritic_tier": row["opencritic_tier"],
-            "was_discarded_only": bool(row["dismissed_at"] and not row["read_at"]),
-            "interaction_ago": humanize((now - interaction_time).total_seconds()) if interaction_time else "",
+            "read_at": row["read_at"],
         })
 
     cur.execute("SELECT count(DISTINCT source) FROM articles")
@@ -539,27 +668,75 @@ def video():
     )
 
 
+@app.route("/themes")
+def themes():
+    conn = psycopg2.connect(DB_URL)
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    cur.execute("SELECT count(*) AS n FROM stories WHERE read_at IS NOT NULL")
+    total_read = cur.fetchone()["n"]
+
+    cur.execute(
+        """
+        SELECT
+            count(*) FILTER (WHERE is_review) AS review_n,
+            count(*) FILTER (WHERE is_video) AS video_n
+        FROM stories WHERE read_at IS NOT NULL
+        """
+    )
+    type_row = cur.fetchone()
+
+    cur.execute(
+        """
+        SELECT a.source_tier AS tier, count(*) AS n
+        FROM articles a JOIN stories s ON a.story_id = s.id
+        WHERE s.read_at IS NOT NULL
+        GROUP BY a.source_tier
+        """
+    )
+    tier_counts = {r["tier"]: r["n"] for r in cur.fetchall()}
+
+    cur.execute(
+        """
+        SELECT a.source AS source, count(*) AS n
+        FROM articles a JOIN stories s ON a.story_id = s.id
+        WHERE s.read_at IS NOT NULL
+        GROUP BY a.source
+        ORDER BY n DESC
+        LIMIT 8
+        """
+    )
+    top_outlets = cur.fetchall()
+
+    cur.execute("SELECT title FROM stories WHERE read_at IS NOT NULL")
+    titles = [r["title"] for r in cur.fetchall()]
+
+    cur.execute("SELECT count(DISTINCT source) FROM articles")
+    source_count = cur.fetchone()["count"]
+
+    cur.close()
+    conn.close()
+
+    keywords = top_keywords(titles, limit=10)
+
+    return render_template_string(
+        THEMES_TEMPLATE,
+        source_count=source_count,
+        active_tab="themes",
+        total_read=total_read,
+        review_n=type_row["review_n"],
+        video_n=type_row["video_n"],
+        tier_counts=tier_counts,
+        top_outlets=top_outlets,
+        keywords=keywords,
+    )
+
+
 @app.route("/story/<int:story_id>/discard", methods=["POST"])
 def discard_story(story_id):
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor()
     cur.execute("UPDATE stories SET dismissed_at = now() WHERE id = %s", (story_id,))
-    conn.commit()
-    cur.close()
-    conn.close()
-    return jsonify(ok=True)
-
-
-@app.route("/story/<int:story_id>/archive", methods=["POST"])
-def archive_story(story_id):
-    # A third state layered on top of read_at/dismissed_at, for
-    # permanently removing something from the Read section itself (the
-    # user asked to be able to discard from there too - Read is defined
-    # as "read_at or dismissed_at is set", so re-setting dismissed_at on
-    # an already-read item wouldn't hide it from that same view).
-    conn = psycopg2.connect(DB_URL)
-    cur = conn.cursor()
-    cur.execute("UPDATE stories SET archived_at = now() WHERE id = %s", (story_id,))
     conn.commit()
     cur.close()
     conn.close()
