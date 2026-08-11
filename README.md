@@ -24,18 +24,26 @@ Live at: http://bj5bgvbwfrf4z0xkuwjeph24.51.38.82.48.sslip.io/
   from clustering entirely (they're serial, not episodic, and would either
   flood the feed or merge into nonsense "stories" otherwise) - the raw
   rows are kept, just never linked to a story, so nothing is thrown away
-- Three tabs (**Main** / **Reviews** / **Video**), each with three views:
-  **Most recent** (default), **Most covered**, and **Read** (things
-  you've opened or discarded, kept as a permanent record rather than just
-  hidden). Tabs are filters, not silos - a video review shows up in both
+- Four tabs: **Main** / **Reviews** / **Video** (each with **Most recent**
+  default / **Most covered** views) and **Themes** - a descriptive stats
+  page over your read/discard history (tier, content-type, and outlet
+  breakdown, plus a lightweight recurring-words stat), *not* a
+  recommender - it shows patterns, it doesn't yet act on them. Tabs are
+  filters over the same data, not silos - a video review shows up in both
   Reviews and Video
-- **Discard** button on every card (top-left, 44×44pt tap target) to
-  clear something from view instantly, without a page reload - including
-  from within the Read tab itself, which permanently removes it via a
-  separate "archived" state layered on top
+- Stories a​ge out of the feed entirely after 2 days (`FEED_WINDOW_DAYS`
+  in `web/app.py`), regardless of read state - rows are never deleted,
+  just filtered out of view, so the Themes page above still has the full
+  history to work with
+- Read sories **dim in place** (opacity, not moved to a separate view) so
+  you can see what you've already seen without losing your scroll
+  position or needing a dedicated destination for it
+- **Discard** button on every card (top-left, 44×44pt tap target) to hide
+  something immediately, permanently, regardless of age
 - No login, no accounts - this is a personal single-user tool. Read/
-  discard/archive state lives in the database (not the browser), so it's
-  consistent across devices, but it's one shared state, not per-visitor
+  discard state lives in the database (not the browser), so it's
+  consistent across devices, but it's one shared state, not per-visitor -
+  the Themes page says this plainly on the page itself
 
 ## Sources
 
@@ -92,7 +100,7 @@ live in the same repo/commit history.
   budget-capped) looks up OpenCritic scores for reviews.
 - **`web/app.py`** - Flask app, server-rendered HTML (no frontend
   framework), reads the same database. Routes: `/`, `/reviews`,
-  `/video`, plus `/story/<id>`.
+  `/video`, `/themes`, plus `/story/<id>`.
 
 No separate job queue, no cache layer - deliberately kept simple for a
 personal-scale project. Postgres is the only shared state.
@@ -101,17 +109,20 @@ personal-scale project. Postgres is the only shared state.
 
 Two tables: `articles` (raw ingested items, with `is_video` and
 `is_walkthrough` flags known unconditionally at ingestion) and `stories`
-(clusters, with review-score, video, and read/dismissed/archived columns).
-Schema is created/migrated by `ensure_schema()` in `ingest.py` on every
-startup (idempotent `CREATE TABLE IF NOT EXISTS` / `ALTER TABLE ADD
-COLUMN IF NOT EXISTS`) - there's no separate migration tool.
+(clusters, with review-score, video, and read/dismissed columns). Schema
+is created/migrated by `ensure_schema()` in `ingest.py` on every startup
+(idempotent `CREATE TABLE IF NOT EXISTS` / `ALTER TABLE ADD COLUMN IF NOT
+EXISTS`) - there's no separate migration tool.
 
-**Read/discard/archive state is three separate timestamp columns on
-`stories`** (`read_at`, `dismissed_at`, `archived_at`), layered rather
-than replacing each other - nothing is ever deleted, each new need has
-just added another filter on top. `read_at`/`dismissed_at` together
-define the Read tab; `archived_at` permanently removes something from
-Read itself once there.
+**Read/discard state is two timestamp columns on `stories`**
+(`read_at`, `dismissed_at`). `read_at` only affects dimming in the feed
+view - it does not remove a story or exempt it from the 2-day window.
+`dismissed_at` (set by tapping discard) hides a story immediately,
+regardless of age. Neither ever deletes the underlying row - the feed
+query filters by recency and dismissal state, the data itself persists
+for the Themes page. (An earlier `archived_at` column, added to support a
+since-removed separate Read tab, still exists in the schema but is no
+longer used by the app - harmless, not worth a migration to remove.)
 
 ### External APIs
 
@@ -149,9 +160,17 @@ Read itself once there.
 - **No pros/cons summary** for reviews - deliberately out of scope for
   now, since doing it well would need an LLM step, which is a genuinely
   bigger piece of infrastructure than anything else here.
-- **No accounts** - read/discard/archive state is one shared record per
-  story, not per-visitor. Fine for a personal tool, would need real auth
-  to support multiple people.
+- **No accounts** - read/discard state is one shared record per story, not
+  per-visitor. The Themes page is currently one shared profile for the
+  same reason. Fine for a personal tool; adding real accounts (Google
+  OAuth is the likely direction) would need a proper migration - read
+  state moving from columns on `stories` to a `user_id`+`story_id` join
+  table, since "read" becomes a property of a person-and-story pair, not
+  the story alone.
+- **Themes is descriptive, not predictive** - it shows what you've read,
+  it doesn't (yet) change what the feed shows you based on it. Deliberate
+  scope choice: validate the signal is meaningful before building
+  anything that acts on it.
 
 ## Local operational notes
 
