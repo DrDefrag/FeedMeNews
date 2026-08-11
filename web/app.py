@@ -36,6 +36,12 @@ WORD_STOPWORDS = {
     "week", "into", "out", "up", "now", "still", "than", "their",
 }
 
+# Tier priority for picking one image out of a multi-source story - reuses
+# the exact same rule already used for picking the synopsis in
+# story_detail(), just applied to image_url instead. Images are always
+# hotlinked to the outlet's own URL, never downloaded or re-hosted here.
+TIER_RANK_SQL = "CASE source_tier WHEN 'trusted' THEN 0 WHEN 'niche' THEN 1 ELSE 2 END"
+
 
 CSS = """
 :root {
@@ -175,9 +181,18 @@ border-radius: 14px;
 padding: 16px;
 margin-bottom: 14px;
 transition: opacity 0.2s ease, transform 0.2s ease;
+overflow: hidden;
 }
 .card.read {
 opacity: 0.5;
+}
+.card-image {
+display: block;
+width: calc(100% + 32px);
+height: 160px;
+object-fit: cover;
+margin: -16px -16px 12px -16px;
+background: var(--border);
 }
 .card-link {
 display: block;
@@ -193,8 +208,8 @@ width: 44px;
 height: 44px;
 border-radius: 50%;
 border: none;
-background: var(--border);
-color: var(--text-secondary);
+background: rgba(0,0,0,0.45);
+color: #fff;
 font-size: 20px;
 line-height: 1;
 display: flex;
@@ -249,6 +264,15 @@ color: var(--text-secondary);
 padding: 16px 16px 0;
 max-width: 640px;
 margin: 0 auto;
+}
+.hero-image {
+display: block;
+width: 100%;
+max-height: 280px;
+object-fit: cover;
+border-radius: 14px;
+margin: 4px 0 18px;
+background: var(--border);
 }
 .synopsis {
 font-size: 15px;
@@ -405,6 +429,9 @@ FEED_TEMPLATE = """<!doctype html>
 <div class="card {{ 'read' if story.is_read else '' }}">
 <button class="discard-btn" data-action="/story/{{ story.id }}/discard" aria-label="Discard">&times;</button>
 <a class="card-link with-discard" href="/story/{{ story.id }}">
+{% if story.image_url %}
+<img class="card-image" src="{{ story.image_url }}" loading="lazy" alt="">
+{% endif %}
 {% if story.opencritic_score and story.opencritic_score > 0 %}
 <span class="score-chip" style="background:var(--{{ (story.opencritic_tier or 'strong')|lower }}-bg); color:var(--{{ (story.opencritic_tier or 'strong')|lower }}-fg);">{{ story.opencritic_score|round|int }}{% if story.opencritic_tier %} &middot; {{ story.opencritic_tier }}{% endif %}</span><br>
 {% endif %}
@@ -503,6 +530,9 @@ STORY_TEMPLATE = """<!doctype html>
 <main style="padding-top:14px;">
 <h1 style="font-size:19px;font-weight:600;line-height:1.35;margin:0 0 8px;">{{ story.title }}</h1>
 <p class="meta">{{ n }} source{{ 's' if n != 1 else '' }}</p>
+{% if hero_image %}
+<img class="hero-image" src="{{ hero_image }}" loading="lazy" alt="">
+{% endif %}
 <div class="bar">
 {% if trusted_n %}<div style="flex:{{ trusted_n }};background:var(--trust);"></div>{% endif %}
 {% if niche_n %}<div style="flex:{{ niche_n }};background:var(--niche);"></div>{% endif %}
@@ -597,6 +627,19 @@ def fetch_stories(tab, view):
             (row["id"],),
         )
         sources = [(r["source"], r["source_tier"]) for r in cur.fetchall()]
+
+        cur.execute(
+            f"""
+            SELECT image_url FROM articles
+            WHERE story_id = %s AND image_url IS NOT NULL
+            ORDER BY {TIER_RANK_SQL}
+            LIMIT 1
+            """,
+            (row["id"],),
+        )
+        image_row = cur.fetchone()
+        image_url = image_row["image_url"] if image_row else None
+
         delta = (now - row["latest"]).total_seconds() if row["latest"] else 0
         stories.append({
             "id": row["id"],
@@ -606,6 +649,7 @@ def fetch_stories(tab, view):
             "niche_n": row["niche_n"],
             "community_n": row["community_n"],
             "sources": sources,
+            "image_url": image_url,
             "time_ago": humanize(delta),
             "opencritic_score": row["opencritic_score"],
             "opencritic_tier": row["opencritic_tier"],
@@ -772,7 +816,7 @@ def story_detail(story_id):
 
     cur.execute(
         """
-        SELECT source, source_tier, title, url, summary,
+        SELECT source, source_tier, title, url, summary, image_url,
                COALESCE(published_at, fetched_at) AS published_at
         FROM articles
         WHERE story_id = %s
@@ -797,6 +841,12 @@ def story_detail(story_id):
             synopsis = cleaned
             break
 
+    hero_image = None
+    for a in sorted(articles, key=lambda a: tier_rank.get(a["source_tier"], 3)):
+        if a["image_url"]:
+            hero_image = a["image_url"]
+            break
+
     now = datetime.datetime.now(datetime.timezone.utc)
     for a in articles:
         delta = (now - a["published_at"]).total_seconds() if a["published_at"] else 0
@@ -807,6 +857,7 @@ def story_detail(story_id):
         story=story,
         articles=articles,
         synopsis=synopsis,
+        hero_image=hero_image,
         n=len(articles),
         trusted_n=trusted_n,
         niche_n=niche_n,
