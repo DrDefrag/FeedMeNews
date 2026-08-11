@@ -45,6 +45,25 @@ REDDIT_SOURCES = [
 # variant, which needed manual ElementTree parsing - YouTube's is standard).
 # Some entries are YouTube Shorts, not full videos - left in for now rather
 # than adding filtering complexity before seeing if it's actually a problem.
+#
+# Fextralife and Bellular News added 11 Aug 2026, tiered "niche" for
+# consistency with Kinda Funny Games - all three are YouTube-native
+# creator channels rather than institutional press outlets, even where
+# large/well-regarded (Fextralife: 1.17m subs; Bellular News: 537k),
+# which is the same distinction already drawn between "trusted"
+# (IGN, Digital Foundry, VGC, Game Informer - all outlets with an
+# editorial history predating YouTube) and "niche" elsewhere.
+#
+# FightinCowboy deliberately NOT added, checked live first: all 6 most
+# recent uploads at check time were numbered "Let's Play Part N" videos -
+# 100% matches for WALKTHROUGH_PATTERN below, meaning virtually nothing
+# from the channel would ever actually surface in the clustered feed.
+# Fextralife was almost added under the same suspicion (also known for
+# guide/wiki content) but checking its actual recent uploads first showed
+# the opposite - genuinely review/analysis/round-up-heavy, zero
+# walkthrough-pattern matches in the sample checked. Good reminder that
+# a channel's general reputation isn't a substitute for checking its
+# actual current output before deciding.
 VIDEO_SOURCES = [
     {"name": "IGN", "tier": "trusted", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCKy1dAqELo0zrOtPkf0eTMw"},
     {"name": "GameSpot", "tier": "trusted", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCbu2SsF-Or3Rsn3NxqODImw"},
@@ -53,6 +72,8 @@ VIDEO_SOURCES = [
     {"name": "Kinda Funny Games", "tier": "niche", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCT6QFE3peNry9PdO5uGj96g"},
     {"name": "Game Informer", "tier": "trusted", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCK-65DO2oOxxMwphl2tYtcw"},
     {"name": "Polygon", "tier": "trusted", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCuVxaQDraOja6xKidcmoufA"},
+    {"name": "Fextralife", "tier": "niche", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UClkUHCETNUph8vM-4gQpwUA"},
+    {"name": "Bellular News", "tier": "niche", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC3nPaf5MeeDTHA2JN7clidg"},
 ]
 
 HEADERS = {"User-Agent": "gaming-news-aggregator/0.1 (personal project)"}
