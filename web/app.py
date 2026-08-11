@@ -1,7 +1,6 @@
 import os
 import re
 import datetime
-from collections import Counter
 import psycopg2
 import psycopg2.extras
 from flask import Flask, render_template_string, request, jsonify
@@ -9,29 +8,34 @@ from flask import Flask, render_template_string, request, jsonify
 app = Flask(__name__)
 DB_URL = os.environ["DATABASE_URL"]
 
-# How long a story stays visible in the feed at all, read or not - agreed
-# with the user on 10 Aug 2026 after the separate "Read" tab turned out not
-# to be useful in practice. Nothing is deleted from the database, this is
-# purely a display-side filter (HAVING clause on latest activity) - the
-# underlying rows stay around for the Themes page below and any future use.
+# How long a story stays visible in Main/Reviews/Video before aging out of
+# the feed entirely, regardless of read state. Decided with the user on
+# 10 Aug 2026 as a single mechanism to solve two asks at once: stopping
+# old low-signal stuff from cluttering the recent feed, and giving read
+# stories a natural way to disappear over time, without needing a
+# separate per-item timer or a manual "clear" action - the underlying
+# rows are never deleted, just filtered out of view once past this
+# window, so nothing is lost for the themes page below. Read state only
+# affects dimming (is_read below), not whether a story is in the window
+# at all - a read story ages out exactly the same way an unread one does.
 FEED_WINDOW_DAYS = 2
 
-# Plain English stopwords plus a few gaming-news boilerplate terms, for the
-# Themes page's keyword extraction. Deliberately not reusing ingest.py's
-# sklearn-based STOPWORDS - the web app has no ML dependency today and this
-# doesn't need one; a plain word-frequency count over a few dozen titles is
-# simple enough without it.
-KEYWORD_STOPWORDS = {
-    "the", "a", "an", "of", "in", "on", "at", "to", "for", "with", "and",
-    "or", "is", "are", "was", "were", "be", "been", "this", "that", "its",
-    "it's", "from", "as", "by", "new", "review", "reviews", "trailer",
-    "gameplay", "launch", "launches", "release", "official", "date",
-    "announcement", "announced", "update", "after", "how", "why", "what",
-    "your", "you", "we", "our", "their", "his", "her", "have", "has",
-    "had", "will", "can", "could", "would", "just", "more", "than",
-    "into", "about", "over", "up", "down", "out", "not", "no", "yes",
-    "get", "gets", "first", "still", "now", "all", "one", "here",
+# Small inline stopword list for the themes word-frequency stat - kept
+# separate from ingest.py's clustering stopwords deliberately, since the
+# two services don't share code or dependencies (no sklearn in the web
+# app), and this list is tuned for headline word frequency, not
+# similarity clustering.
+WORD_STOPWORDS = {
+    "the", "a", "an", "of", "in", "on", "for", "to", "and", "or", "with",
+    "is", "are", "at", "its", "new", "review", "trailer", "official",
+    "launch", "launches", "release", "released", "date", "gameplay",
+    "reveal", "revealed", "announced", "announcement", "coming", "after",
+    "from", "this", "that", "how", "why", "what", "your", "you", "we",
+    "will", "has", "have", "been", "be", "was", "were", "but", "not",
+    "all", "more", "just", "get", "gets", "first", "full", "update",
+    "week", "into", "out", "up", "now", "still", "than", "their",
 }
+
 
 CSS = """
 :root {
@@ -106,18 +110,20 @@ margin: 0;
 }
 .tabs {
 display: flex;
-gap: 2px;
+gap: 4px;
 padding: 4px 16px 0;
 max-width: 640px;
 margin: 0 auto;
 border-bottom: 1px solid var(--border);
+overflow-x: auto;
 }
 .tab {
-font-size: 13.5px;
+font-size: 14px;
 font-weight: 600;
-padding: 8px 10px;
+padding: 8px 12px;
 border-radius: 8px 8px 0 0;
 color: var(--text-secondary);
+white-space: nowrap;
 }
 .tab.active {
 color: var(--text);
@@ -171,7 +177,7 @@ margin-bottom: 14px;
 transition: opacity 0.2s ease, transform 0.2s ease;
 }
 .card.read {
-opacity: 0.55;
+opacity: 0.5;
 }
 .card-link {
 display: block;
@@ -315,43 +321,34 @@ margin: 22px 0 10px;
 text-transform: uppercase;
 letter-spacing: 0.04em;
 }
-.theme-card {
+.theme-note {
+font-size: 13px;
+color: var(--text-secondary);
+line-height: 1.5;
+margin: 4px 0 4px;
+}
+.theme-list {
 background: var(--card);
 border: 1px solid var(--border);
 border-radius: 14px;
-padding: 16px;
-margin-bottom: 14px;
+padding: 4px 16px;
+margin-bottom: 4px;
 }
-.theme-card h3 {
-font-size: 12px;
-font-weight: 600;
-color: var(--text-secondary);
-margin: 0 0 12px;
-text-transform: uppercase;
-letter-spacing: 0.04em;
-}
-.stat-line {
+.theme-list-row {
 display: flex;
 justify-content: space-between;
+align-items: center;
+padding: 12px 0;
+border-bottom: 1px solid var(--border);
 font-size: 14px;
-margin-bottom: 8px;
 }
-.stat-line:last-child {
-margin-bottom: 0;
+.theme-list-row:last-child {
+border-bottom: none;
 }
-.stat-line .n {
-font-weight: 600;
-color: var(--text-secondary);
-}
-.keyword-chip {
+.theme-count {
 font-size: 13px;
+color: var(--text-secondary);
 font-weight: 600;
-padding: 5px 12px;
-border-radius: 20px;
-background: var(--border);
-color: var(--text);
-display: inline-block;
-margin: 0 6px 6px 0;
 }
 """
 
@@ -375,15 +372,6 @@ document.addEventListener("click", function (e) {
 </script>
 """
 
-TABS_HTML = """
-<div class="tabs">
-<a href="/" class="tab {{ 'active' if active_tab == 'main' else '' }}">Main</a>
-<a href="/reviews" class="tab {{ 'active' if active_tab == 'reviews' else '' }}">Reviews</a>
-<a href="/video" class="tab {{ 'active' if active_tab == 'video' else '' }}">Video</a>
-<a href="/themes" class="tab {{ 'active' if active_tab == 'themes' else '' }}">Themes</a>
-</div>
-"""
-
 FEED_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
@@ -397,7 +385,12 @@ FEED_TEMPLATE = """<!doctype html>
 <h1>FeedMeNews</h1>
 <p>Gaming coverage across {{ source_count }} sources, grouped by story</p>
 </header>
-""" + TABS_HTML + """
+<div class="tabs">
+<a href="/" class="tab {{ 'active' if active_tab == 'main' else '' }}">Main</a>
+<a href="/reviews" class="tab {{ 'active' if active_tab == 'reviews' else '' }}">Reviews</a>
+<a href="/video" class="tab {{ 'active' if active_tab == 'video' else '' }}">Video</a>
+<a href="/themes" class="tab {{ 'active' if active_tab == 'themes' else '' }}">Themes</a>
+</div>
 <div class="view-row">
 <a href="{{ base_path }}" class="view-link {{ 'active' if view == 'recent' else '' }}">Most recent</a>
 <a href="{{ base_path }}?view=covered" class="view-link {{ 'active' if view == 'covered' else '' }}">Most covered</a>
@@ -409,7 +402,7 @@ FEED_TEMPLATE = """<!doctype html>
 </div>
 <main>
 {% for story in stories %}
-<div class="card{{ ' read' if story.read_at else '' }}">
+<div class="card {{ 'read' if story.is_read else '' }}">
 <button class="discard-btn" data-action="/story/{{ story.id }}/discard" aria-label="Discard">&times;</button>
 <a class="card-link with-discard" href="/story/{{ story.id }}">
 {% if story.opencritic_score and story.opencritic_score > 0 %}
@@ -451,49 +444,47 @@ THEMES_TEMPLATE = """<!doctype html>
 <h1>FeedMeNews</h1>
 <p>Gaming coverage across {{ source_count }} sources, grouped by story</p>
 </header>
-""" + TABS_HTML + """
+<div class="tabs">
+<a href="/" class="tab">Main</a>
+<a href="/reviews" class="tab">Reviews</a>
+<a href="/video" class="tab">Video</a>
+<a href="/themes" class="tab active">Themes</a>
+</div>
 <main style="padding-top:16px;">
-{% if total_read == 0 %}
-<p class="meta">Nothing here yet - read a few stories and check back. This
-page reflects a single shared reading history for this installation, not
-a personal profile yet (no accounts exist here).</p>
+{% if total == 0 %}
+<p class="meta">Nothing to show yet - read or discard a few stories first.</p>
 {% else %}
-<p class="meta" style="margin-bottom:18px;">Based on {{ total_read }} story{{ 's' if total_read != 1 else '' }} you've read. One shared history for this installation for now, not a personal profile - no accounts exist yet.</p>
+<p class="theme-note">Based on {{ total }} stories read or discarded so far.
+This is a single shared profile for now - there's no login yet, so it
+reflects everyone who's used this installation, not a personal account.</p>
 
-<div class="theme-card">
-<h3>Coverage tier</h3>
-<div class="bar" style="margin-bottom:12px;">
-{% if tier_counts.trusted %}<div style="flex:{{ tier_counts.trusted }};background:var(--trust);"></div>{% endif %}
-{% if tier_counts.niche %}<div style="flex:{{ tier_counts.niche }};background:var(--niche);"></div>{% endif %}
-{% if tier_counts.community %}<div style="flex:{{ tier_counts.community }};background:var(--comm);"></div>{% endif %}
-</div>
-<div class="stat-line"><span>Trusted</span><span class="n">{{ tier_counts.trusted or 0 }}</span></div>
-<div class="stat-line"><span>Niche</span><span class="n">{{ tier_counts.niche or 0 }}</span></div>
-<div class="stat-line"><span>Community</span><span class="n">{{ tier_counts.community or 0 }}</span></div>
-</div>
-
-<div class="theme-card">
-<h3>Content type</h3>
-<div class="stat-line"><span>Reviews</span><span class="n">{{ review_n }}</span></div>
-<div class="stat-line"><span>Video</span><span class="n">{{ video_n }}</span></div>
-<div class="stat-line"><span>General news</span><span class="n">{{ total_read - review_n - video_n if total_read - review_n - video_n > 0 else 0 }}</span></div>
-</div>
-
-<div class="theme-card">
-<h3>Top outlets</h3>
-{% for outlet in top_outlets %}
-<div class="stat-line"><span>{{ outlet.source }}</span><span class="n">{{ outlet.n }}</span></div>
+<p class="section-label">By trust tier</p>
+<div class="theme-list">
+{% for label, n in tier_counts %}
+<div class="theme-list-row"><span>{{ label }}</span><span class="theme-count">{{ n }}</span></div>
 {% endfor %}
 </div>
 
-{% if keywords %}
-<div class="theme-card">
-<h3>Frequently appearing words</h3>
-{% for word, count in keywords %}
-<span class="keyword-chip">{{ word }}</span>
+<p class="section-label">By content type</p>
+<div class="theme-list">
+{% for label, n in type_counts %}
+<div class="theme-list-row"><span>{{ label }}</span><span class="theme-count">{{ n }}</span></div>
 {% endfor %}
 </div>
-{% endif %}
+
+<p class="section-label">Top outlets</p>
+<div class="theme-list">
+{% for label, n in top_outlets %}
+<div class="theme-list-row"><span>{{ label }}</span><span class="theme-count">{{ n }}</span></div>
+{% endfor %}
+</div>
+
+<p class="section-label">Recurring words</p>
+<div class="chips">
+{% for word, n in top_words %}
+<span class="chip" style="background:var(--border); color:var(--text-secondary);">{{ word }} &middot; {{ n }}</span>
+{% endfor %}
+</div>
 {% endif %}
 </main>
 </body>
@@ -561,16 +552,6 @@ def valid_view():
     return v if v in ("recent", "covered") else "recent"
 
 
-def top_keywords(titles, limit=10):
-    counts = Counter()
-    for t in titles:
-        for word in re.findall(r"[a-zA-Z']+", t.lower()):
-            if len(word) < 3 or word in KEYWORD_STOPWORDS:
-                continue
-            counts[word] += 1
-    return counts.most_common(limit)
-
-
 def fetch_stories(tab, view):
     if tab == "reviews":
         tab_where = "AND s.is_review = TRUE"
@@ -598,7 +579,8 @@ def fetch_stories(tab, view):
             max(COALESCE(a.published_at, a.fetched_at)) AS latest
         FROM stories s
         JOIN articles a ON a.story_id = s.id
-        WHERE 1=1 {tab_where} AND s.dismissed_at IS NULL
+        WHERE 1=1 {tab_where}
+        AND s.dismissed_at IS NULL
         GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier, s.read_at
         HAVING max(COALESCE(a.published_at, a.fetched_at)) > now() - interval '{FEED_WINDOW_DAYS} days'
         ORDER BY {order_by}
@@ -627,7 +609,7 @@ def fetch_stories(tab, view):
             "time_ago": humanize(delta),
             "opencritic_score": row["opencritic_score"],
             "opencritic_tier": row["opencritic_tier"],
-            "read_at": row["read_at"],
+            "is_read": row["read_at"] is not None,
         })
 
     cur.execute("SELECT count(DISTINCT source) FROM articles")
@@ -673,62 +655,84 @@ def themes():
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    cur.execute("SELECT count(*) AS n FROM stories WHERE read_at IS NOT NULL")
-    total_read = cur.fetchone()["n"]
-
     cur.execute(
-        """
-        SELECT
-            count(*) FILTER (WHERE is_review) AS review_n,
-            count(*) FILTER (WHERE is_video) AS video_n
-        FROM stories WHERE read_at IS NOT NULL
-        """
+        "SELECT count(*) AS n FROM stories WHERE read_at IS NOT NULL OR dismissed_at IS NOT NULL"
     )
-    type_row = cur.fetchone()
-
-    cur.execute(
-        """
-        SELECT a.source_tier AS tier, count(*) AS n
-        FROM articles a JOIN stories s ON a.story_id = s.id
-        WHERE s.read_at IS NOT NULL
-        GROUP BY a.source_tier
-        """
-    )
-    tier_counts = {r["tier"]: r["n"] for r in cur.fetchall()}
-
-    cur.execute(
-        """
-        SELECT a.source AS source, count(*) AS n
-        FROM articles a JOIN stories s ON a.story_id = s.id
-        WHERE s.read_at IS NOT NULL
-        GROUP BY a.source
-        ORDER BY n DESC
-        LIMIT 8
-        """
-    )
-    top_outlets = cur.fetchall()
-
-    cur.execute("SELECT title FROM stories WHERE read_at IS NOT NULL")
-    titles = [r["title"] for r in cur.fetchall()]
+    total = cur.fetchone()["n"]
 
     cur.execute("SELECT count(DISTINCT source) FROM articles")
     source_count = cur.fetchone()["count"]
 
+    tier_counts = []
+    type_counts = []
+    top_outlets = []
+    top_words = []
+
+    if total > 0:
+        cur.execute(
+            """
+            SELECT a.source_tier AS tier, count(DISTINCT s.id) AS n
+            FROM stories s
+            JOIN articles a ON a.story_id = s.id
+            WHERE s.read_at IS NOT NULL OR s.dismissed_at IS NOT NULL
+            GROUP BY a.source_tier
+            ORDER BY n DESC
+            """
+        )
+        tier_counts = [(r["tier"].capitalize(), r["n"]) for r in cur.fetchall()]
+
+        cur.execute(
+            """
+            SELECT
+                count(*) FILTER (WHERE is_review) AS review_n,
+                count(*) FILTER (WHERE is_video) AS video_n,
+                count(*) FILTER (WHERE NOT is_review AND NOT is_video) AS main_n
+            FROM stories
+            WHERE read_at IS NOT NULL OR dismissed_at IS NOT NULL
+            """
+        )
+        row = cur.fetchone()
+        type_counts = [
+            ("Main news", row["main_n"]),
+            ("Reviews", row["review_n"]),
+            ("Video", row["video_n"]),
+        ]
+
+        cur.execute(
+            """
+            SELECT a.source AS source, count(DISTINCT s.id) AS n
+            FROM stories s
+            JOIN articles a ON a.story_id = s.id
+            WHERE s.read_at IS NOT NULL OR s.dismissed_at IS NOT NULL
+            GROUP BY a.source
+            ORDER BY n DESC
+            LIMIT 8
+            """
+        )
+        top_outlets = [(r["source"], r["n"]) for r in cur.fetchall()]
+
+        cur.execute(
+            "SELECT title FROM stories WHERE read_at IS NOT NULL OR dismissed_at IS NOT NULL"
+        )
+        word_counts = {}
+        for r in cur.fetchall():
+            for w in re.findall(r"[a-zA-Z']+", r["title"].lower()):
+                if len(w) < 3 or w in WORD_STOPWORDS:
+                    continue
+                word_counts[w] = word_counts.get(w, 0) + 1
+        top_words = sorted(word_counts.items(), key=lambda x: -x[1])[:14]
+
     cur.close()
     conn.close()
 
-    keywords = top_keywords(titles, limit=10)
-
     return render_template_string(
         THEMES_TEMPLATE,
+        total=total,
         source_count=source_count,
-        active_tab="themes",
-        total_read=total_read,
-        review_n=type_row["review_n"],
-        video_n=type_row["video_n"],
         tier_counts=tier_counts,
+        type_counts=type_counts,
         top_outlets=top_outlets,
-        keywords=keywords,
+        top_words=top_words,
     )
 
 
