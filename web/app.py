@@ -27,6 +27,20 @@ FEED_WINDOW_DAYS = 2
 # removal before it's gone with no trace.
 UNDO_WINDOW_MS = 5000
 
+# Minimum source count for a story to show by default on the Main tab.
+# Added 11 Aug 2026: with 25 sources ingesting continuously, most of what
+# comes through is genuinely single-source (one outlet's own story, one
+# Reddit thread) rather than multiple outlets converging on the same real
+# event - closer to the raw firehose than "the news." Ground News's own
+# approach was the reference point: treat breadth of independent
+# coverage as the actual significance signal, not just recency. Applied
+# to Main only, not Reviews/Video - a lot of genuinely good reviews and
+# videos are legitimately single-source by nature (one outlet reviewing
+# a niche game, one channel covering something), so filtering those the
+# same way would throw out real content, not noise. Nothing is hidden
+# permanently - a plain link reveals every story, single-source included.
+MIN_SOURCES_DEFAULT = 2
+
 # Small inline stopword list for the themes word-frequency stat - kept
 # separate from ingest.py's clustering stopwords deliberately, since the
 # two services don't share code or dependencies (no sklearn in the web
@@ -198,6 +212,18 @@ color: var(--text-secondary);
 background: var(--card);
 color: var(--text);
 box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+}
+.filter-toggle {
+font-size: 12px;
+color: var(--text-secondary);
+padding: 0 16px 12px;
+max-width: 640px;
+margin: 0 auto;
+}
+.filter-toggle a {
+text-decoration: underline;
+font-weight: 600;
+color: var(--text-secondary);
 }
 .legend {
 display: flex;
@@ -635,10 +661,19 @@ FEED_TEMPLATE = """<!doctype html>
 <div class="sticky-nav">
 """ + TABS_HTML + """
 <div class="segmented">
-<a href="{{ base_path }}" class="segmented-option {{ 'active' if view == 'recent' else '' }}">Most recent</a>
-<a href="{{ base_path }}?view=covered" class="segmented-option {{ 'active' if view == 'covered' else '' }}">Most covered</a>
+<a href="{{ recent_url }}" class="segmented-option {{ 'active' if view == 'recent' else '' }}">Most recent</a>
+<a href="{{ covered_url }}" class="segmented-option {{ 'active' if view == 'covered' else '' }}">Most covered</a>
 </div>
 </div>
+{% if show_filter_toggle %}
+<div class="filter-toggle">
+{% if show_all %}
+Showing every story &middot; <a href="{{ toggle_url }}">Show 2+ sources only</a>
+{% else %}
+Showing stories with 2+ sources{% if hidden_count %} &middot; {{ hidden_count }} single-source hidden{% endif %} &middot; <a href="{{ toggle_url }}">Show all</a>
+{% endif %}
+</div>
+{% endif %}
 <div class="legend">
 <span><span class="dot" style="background:var(--trust)"></span>Trusted</span>
 <span><span class="dot" style="background:var(--niche)"></span>Niche</span>
@@ -807,7 +842,22 @@ def valid_view():
     return v if v in ("recent", "covered") else "recent"
 
 
-def fetch_stories(tab, view):
+def valid_show_all():
+    return request.args.get("all") == "1"
+
+
+def build_url(base_path, view="recent", show_all=False):
+    params = []
+    if view == "covered":
+        params.append("view=covered")
+    if show_all:
+        params.append("all=1")
+    if not params:
+        return base_path
+    return base_path + "?" + "&".join(params)
+
+
+def fetch_stories(tab, view, show_all=False):
     if tab == "reviews":
         tab_where = "AND s.is_review = TRUE"
     elif tab == "video":
@@ -816,6 +866,13 @@ def fetch_stories(tab, view):
         tab_where = "AND s.is_review = FALSE AND s.is_video = FALSE"
 
     order_by = "n DESC, latest DESC" if view == "covered" else "latest DESC"
+
+    # Coverage filter is Main-tab only - see MIN_SOURCES_DEFAULT above for
+    # the reasoning. Reviews/Video are never filtered regardless of the
+    # show_all flag's value.
+    coverage_having = ""
+    if tab == "main" and not show_all:
+        coverage_having = f"AND count(*) >= {MIN_SOURCES_DEFAULT}"
 
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -839,6 +896,7 @@ def fetch_stories(tab, view):
         AND s.dismissed_at IS NULL
         GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier, s.read_at, s.liked_at
         HAVING max(COALESCE(a.published_at, a.fetched_at)) > now() - interval '{FEED_WINDOW_DAYS} days'
+        {coverage_having}
         ORDER BY (s.read_at IS NOT NULL), {order_by}
         LIMIT 30
         """
@@ -883,41 +941,71 @@ def fetch_stories(tab, view):
             "is_liked": row["liked_at"] is not None,
         })
 
+    hidden_count = 0
+    if tab == "main" and not show_all:
+        cur.execute(
+            f"""
+            SELECT count(*) AS n FROM (
+                SELECT s.id
+                FROM stories s
+                JOIN articles a ON a.story_id = s.id
+                WHERE s.is_review = FALSE AND s.is_video = FALSE AND s.dismissed_at IS NULL
+                GROUP BY s.id
+                HAVING max(COALESCE(a.published_at, a.fetched_at)) > now() - interval '{FEED_WINDOW_DAYS} days'
+                AND count(*) < {MIN_SOURCES_DEFAULT}
+            ) hidden
+            """
+        )
+        hidden_count = cur.fetchone()["n"]
+
     cur.execute("SELECT count(DISTINCT source) FROM articles")
     source_count = cur.fetchone()["count"]
 
     cur.close()
     conn.close()
-    return stories, source_count
+    return stories, source_count, hidden_count
 
 
 @app.route("/")
 def index():
     view = valid_view()
-    stories, source_count = fetch_stories(tab="main", view=view)
+    show_all = valid_show_all()
+    stories, source_count, hidden_count = fetch_stories(tab="main", view=view, show_all=show_all)
     return render_template_string(
         FEED_TEMPLATE, stories=stories, source_count=source_count,
-        active_tab="main", base_path="/", view=view,
+        active_tab="main", view=view, show_all=show_all, hidden_count=hidden_count,
+        recent_url=build_url("/", view="recent", show_all=show_all),
+        covered_url=build_url("/", view="covered", show_all=show_all),
+        toggle_url=build_url("/", view=view, show_all=not show_all),
+        show_filter_toggle=True,
     )
 
 
 @app.route("/reviews")
 def reviews():
     view = valid_view()
-    stories, source_count = fetch_stories(tab="reviews", view=view)
+    stories, source_count, _ = fetch_stories(tab="reviews", view=view)
     return render_template_string(
         FEED_TEMPLATE, stories=stories, source_count=source_count,
-        active_tab="reviews", base_path="/reviews", view=view,
+        active_tab="reviews", view=view, show_all=True, hidden_count=0,
+        recent_url=build_url("/reviews", view="recent"),
+        covered_url=build_url("/reviews", view="covered"),
+        toggle_url=None,
+        show_filter_toggle=False,
     )
 
 
 @app.route("/video")
 def video():
     view = valid_view()
-    stories, source_count = fetch_stories(tab="video", view=view)
+    stories, source_count, _ = fetch_stories(tab="video", view=view)
     return render_template_string(
         FEED_TEMPLATE, stories=stories, source_count=source_count,
-        active_tab="video", base_path="/video", view=view,
+        active_tab="video", view=view, show_all=True, hidden_count=0,
+        recent_url=build_url("/video", view="recent"),
+        covered_url=build_url("/video", view="covered"),
+        toggle_url=None,
+        show_filter_toggle=False,
     )
 
 
