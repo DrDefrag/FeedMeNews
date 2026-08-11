@@ -225,7 +225,7 @@ border: 1px solid var(--border);
 border-radius: 14px;
 padding: 16px;
 margin-bottom: 14px;
-transition: opacity 0.2s ease, transform 0.2s ease;
+transition: opacity 0.2s ease, transform 0.2s ease, max-height 0.32s ease, margin-bottom 0.32s ease, padding 0.32s ease;
 overflow: hidden;
 }
 .card.read {
@@ -527,6 +527,25 @@ CARD_INTERACTIONS_JS = """
     }, """ + str(UNDO_WINDOW_MS) + """);
   }
 
+  function collapseAndRemove(card) {
+    // Rather than yanking the card's full height out of the layout in
+    // one instant (which snaps everything below it upward with no
+    // warning - jarring if the user has scrolled past it already), lock
+    // in its current height explicitly, then animate height/margin/
+    // padding down to zero alongside the fade, so any layout shift
+    // happens smoothly and visibly rather than as a sudden jump.
+    var height = card.offsetHeight;
+    card.style.maxHeight = height + "px";
+    card.offsetHeight; // force a reflow so the browser registers the starting height
+    card.style.opacity = "0";
+    card.style.transform = "scale(0.96)";
+    card.style.maxHeight = "0px";
+    card.style.marginBottom = "0px";
+    card.style.paddingTop = "0px";
+    card.style.paddingBottom = "0px";
+    setTimeout(function () { card.remove(); }, 340);
+  }
+
   document.addEventListener("click", function (e) {
     var discardBtn = e.target.closest(".discard-btn");
     if (discardBtn) {
@@ -539,9 +558,7 @@ CARD_INTERACTIONS_JS = """
         if (!r.ok) return;
         card.classList.add("pending-remove");
         var removeTimeout = setTimeout(function () {
-          card.style.opacity = "0";
-          card.style.transform = "scale(0.96)";
-          setTimeout(function () { card.remove(); }, 200);
+          collapseAndRemove(card);
         }, """ + str(UNDO_WINDOW_MS) + """);
         showToast("Story discarded", function () {
           clearTimeout(removeTimeout);
@@ -822,7 +839,7 @@ def fetch_stories(tab, view):
         AND s.dismissed_at IS NULL
         GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier, s.read_at, s.liked_at
         HAVING max(COALESCE(a.published_at, a.fetched_at)) > now() - interval '{FEED_WINDOW_DAYS} days'
-        ORDER BY {order_by}
+        ORDER BY (s.read_at IS NOT NULL), {order_by}
         LIMIT 30
         """
     )
