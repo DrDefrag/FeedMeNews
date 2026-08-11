@@ -153,49 +153,70 @@ def ensure_schema(conn):
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS opencritic_review_count INTEGER;")
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS opencritic_game_name TEXT;")
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS opencritic_checked_at TIMESTAMPTZ;")
-        # Read/discard tracking (added 10 Aug 2026). Single-user personal
-        # tool, no accounts, so this is one shared record per story rather
-        # than per-visitor - revisit if this ever becomes multi-user.
-        # read_at = organic click-through (set once, first visit only).
-        # dismissed_at = explicit discard tap. Kept as two separate columns
-        # even though both currently surface in the same "Read" section,
-        # since "engaged with" and "actively skipped" are different signals
-        # worth preserving for the interest-profile idea discussed with
-        # the user - collapsing them now would lose data we can't get back.
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ;")
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS dismissed_at TIMESTAMPTZ;")
-        # archived_at (added 10 Aug 2026): a third state layered on top of
-        # the two above, for permanently removing something from the Read
-        # section itself (the user asked to be able to discard from there
-        # too - read_at/dismissed_at alone can't express that, since Read
-        # is defined as "either one is set", so re-setting dismissed_at on
-        # an already-read item wouldn't hide it). Nothing is ever deleted,
-        # just progressively filtered - consistent with how this project
-        # has handled state throughout.
+        # archived_at: added to support a since-removed separate Read tab.
+        # No longer used by the app (dismissed_at alone means "hide
+        # immediately" everywhere now) - left in place, harmless, not
+        # worth a migration to remove.
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;")
-        # Video support (added 10 Aug 2026). is_video/is_walkthrough live on
-        # articles since they're known unconditionally at ingestion (we know
-        # for certain whether a fetch came from a YouTube feed - no title
-        # guessing needed, unlike review detection). stories.is_video is a
-        # separate flag set by mark_video_stories() below, aggregated from
-        # whether any member article is a video - mirrors how is_review
-        # already works, just via a join instead of a title check.
         cur.execute("ALTER TABLE articles ADD COLUMN IF NOT EXISTS is_video BOOLEAN NOT NULL DEFAULT FALSE;")
         cur.execute("ALTER TABLE articles ADD COLUMN IF NOT EXISTS is_walkthrough BOOLEAN NOT NULL DEFAULT FALSE;")
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS is_video BOOLEAN NOT NULL DEFAULT FALSE;")
+        # image_url (added 11 Aug 2026). Checked live against all 25
+        # sources before building this: 14/14 press RSS and 7/7 YouTube
+        # channels reliably include a real image; Reddit's .rss format
+        # has none at all (checked the full raw feed, not just one
+        # entry, across two subreddits - genuinely zero, not a fluke).
+        # We hotlink the outlet's own URL here, never download or
+        # re-host the actual image file ourselves.
+        cur.execute("ALTER TABLE articles ADD COLUMN IF NOT EXISTS image_url TEXT;")
     conn.commit()
 
 
-def upsert_article(conn, source, tier, title, url, summary, published_at, is_video=False):
+def extract_image_url(entry):
+    """Pull a hotlinkable image URL out of a feedparser entry.
+
+    Checked in priority order against real feeds on 11 Aug 2026: standard
+    media:thumbnail (most outlets and all YouTube channels), media:content
+    (GameSpot, Eurogamer, Rock Paper Shotgun, VG247), image enclosures
+    (Kotaku, TheGamer), then finally a raw <img> inside the HTML summary
+    as a last resort. Returns None if nothing is found - callers store
+    that as-is rather than guessing, so a story with no image just shows
+    no image slot, never a broken one.
+    """
+    if getattr(entry, "media_thumbnail", None):
+        url = entry.media_thumbnail[0].get("url")
+        if url:
+            return url
+    if getattr(entry, "media_content", None):
+        for m in entry.media_content:
+            url = m.get("url")
+            if url:
+                return url
+    if getattr(entry, "enclosures", None):
+        for enc in entry.enclosures:
+            if "image" in (enc.get("type") or ""):
+                url = enc.get("href") or enc.get("url")
+                if url:
+                    return url
+    html = entry.get("summary", "") or ""
+    if getattr(entry, "content", None):
+        html += entry.content[0].get("value", "") or ""
+    m = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', html)
+    return m.group(1) if m else None
+
+
+def upsert_article(conn, source, tier, title, url, summary, published_at, is_video=False, image_url=None):
     is_walkthrough = bool(is_video and WALKTHROUGH_PATTERN.search(title))
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO articles (source, source_tier, title, url, summary, published_at, is_video, is_walkthrough)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO articles (source, source_tier, title, url, summary, published_at, is_video, is_walkthrough, image_url)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (url) DO NOTHING;
             """,
-            (source, tier, title, url, summary, published_at, is_video, is_walkthrough),
+            (source, tier, title, url, summary, published_at, is_video, is_walkthrough, image_url),
         )
     conn.commit()
 
@@ -206,11 +227,12 @@ def fetch_rss(conn, source):
         title = entry.get("title", "").strip()
         url = entry.get("link", "").strip()
         summary = (entry.get("summary", "") or "")[:400]
+        image_url = extract_image_url(entry)
         published = None
         if entry.get("published_parsed"):
             published = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
         if title and url:
-            upsert_article(conn, source["name"], source["tier"], title, url, summary, published)
+            upsert_article(conn, source["name"], source["tier"], title, url, summary, published, image_url=image_url)
 
 
 def fetch_video(conn, source):
@@ -221,11 +243,12 @@ def fetch_video(conn, source):
         title = entry.get("title", "").strip()
         url = entry.get("link", "").strip()
         summary = (entry.get("summary", "") or "")[:400]
+        image_url = extract_image_url(entry)
         published = None
         if entry.get("published_parsed"):
             published = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
         if title and url:
-            upsert_article(conn, source["name"], source["tier"], title, url, summary, published, is_video=True)
+            upsert_article(conn, source["name"], source["tier"], title, url, summary, published, is_video=True, image_url=image_url)
 
 
 def fetch_reddit(conn, source):
@@ -233,7 +256,11 @@ def fetch_reddit(conn, source):
     # datacenter/hosting IP ranges, but its older .rss (Atom) endpoint is
     # not subject to the same block, just normal rate limits. We parse it
     # directly with ElementTree since feedparser doesn't reliably detect
-    # entries in this particular Atom feed variant.
+    # entries in this particular Atom feed variant. No image extraction
+    # here - checked live on 11 Aug 2026, Reddit's .rss format carries no
+    # thumbnail/media/enclosure/img data at all across the full raw feed,
+    # not just a single entry, across two different subreddits. A genuine
+    # gap, not worth extra plumbing for - image_url stays NULL for these.
     resp = requests.get(source["url"], headers=HEADERS, timeout=15)
     resp.raise_for_status()
     root = ET.fromstring(resp.content)
