@@ -999,6 +999,13 @@ def fetch_rail(kind):
     how many independent sources are on a story - the same signal
     "Most covered" already sorts by, just surfaced automatically instead
     of requiring the user to go choose that view.
+
+    Only called when the Main page is in its default "recent" view (see
+    index() below) - shown alongside a coverage-sorted list, the rails
+    never changed, which made switching to "Most covered" look like it
+    did nothing since the most visually prominent content on screen
+    stayed identical. Hiding rails specifically in "Most covered" makes
+    that switch immediately, visibly obvious instead.
     """
     if kind == "reviews":
         tab_where = "AND s.is_review = TRUE"
@@ -1172,9 +1179,17 @@ def index():
     view = valid_view()
     show_all = valid_show_all()
     stories, source_count, hidden_count = fetch_stories(tab="main", view=view, show_all=show_all)
-    trending = fetch_rail("trending")
-    review_rail = fetch_rail("reviews")
-    video_rail = fetch_rail("video")
+
+    show_rails = (view == "recent")
+    if show_rails:
+        trending = fetch_rail("trending")
+        review_rail = fetch_rail("reviews")
+        video_rail = fetch_rail("video")
+    else:
+        trending = None
+        review_rail = None
+        video_rail = None
+
     return render_template_string(
         FEED_TEMPLATE, stories=stories, source_count=source_count,
         active_tab="main", view=view, show_all=show_all, hidden_count=hidden_count,
@@ -1182,7 +1197,7 @@ def index():
         covered_url=build_url("/", view="covered", show_all=show_all),
         toggle_url=build_url("/", view=view, show_all=not show_all),
         show_filter_toggle=True,
-        show_rails=True, trending=trending, review_rail=review_rail, video_rail=video_rail,
+        show_rails=show_rails, trending=trending, review_rail=review_rail, video_rail=video_rail,
     )
 
 
