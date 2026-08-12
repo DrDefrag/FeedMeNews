@@ -13,6 +13,39 @@ DB_URL = os.environ["DATABASE_URL"]
 OPENCRITIC_API_KEY = os.environ.get("OPENCRITIC_API_KEY")
 OPENCRITIC_HOST = "opencritic-api.p.rapidapi.com"
 
+# Game Developer, The Indie Informer, and Indie Game Reviewer added 12
+# Aug 2026, following a discussion about diversifying sources rather
+# than just adding volume. Checked live first, same as always:
+#
+# Game Developer (gamedeveloper.com, formerly Gamasutra) - tiered
+# "trusted": a real professional trade publication (industry/craft
+# news - layoffs, acquisitions, design deep-dives - a genuinely
+# different angle from our existing consumer-press sources), owned by
+# Informa Tech Target (confirmed via Wikipedia), independent of the
+# Ziff Davis/Future plc/Valnet/Hookshot Media concentration already
+# found among our other sources. Publishes several times daily.
+#
+# The Indie Informer and Indie Game Reviewer - both tiered "niche":
+# small, genuinely independent teams (Indie Informer is Patreon-funded;
+# Indie Game Reviewer's own About page describes it as "an
+# independently operated website," running since 2007), covering indie
+# games exclusively - the specific gap asked for. Indie Game Reviewer
+# publishes roughly weekly rather than daily - lower cadence than our
+# other sources, worth knowing going in, but still genuine, verified
+# activity (confirmed via actual feed pubDates, not a stale-looking
+# featured/pinned carousel on the homepage, which turned out to be
+# misleading on its own).
+#
+# r/IndieDev and indie YouTube curator Jupiter Hadley were both
+# checked and deliberately NOT added: r/IndieDev's real content is
+# almost entirely self-promotional WIP showcases (GIFs/screenshots of
+# one dev's own project) rather than news that could ever cluster with
+# anything else - adding it would just recreate the single-source
+# noise problem MIN_SOURCES_DEFAULT already exists to manage. Jupiter
+# Hadley's current uploads are 100% numbered "Part N" jam playthroughs
+# - a complete WALKTHROUGH_PATTERN match, meaning virtually nothing
+# from the channel would ever surface, same outcome as FightinCowboy
+# earlier.
 RSS_SOURCES = [
     {"name": "IGN", "tier": "trusted", "url": "https://www.ign.com/rss/articles/feed?tags=games"},
     {"name": "Polygon", "tier": "trusted", "url": "https://www.polygon.com/feed/"},
@@ -28,6 +61,9 @@ RSS_SOURCES = [
     {"name": "Push Square", "tier": "niche", "url": "https://www.pushsquare.com/feeds/latest"},
     {"name": "Pure Xbox", "tier": "niche", "url": "https://www.purexbox.com/feeds/latest"},
     {"name": "PCGamesN", "tier": "niche", "url": "https://www.pcgamesn.com/feed"},
+    {"name": "Game Developer", "tier": "trusted", "url": "https://www.gamedeveloper.com/feeds/rss.xml"},
+    {"name": "The Indie Informer", "tier": "niche", "url": "https://theindieinformer.com/feed/"},
+    {"name": "Indie Game Reviewer", "tier": "niche", "url": "https://indiegamereviewer.com/feed/"},
 ]
 
 REDDIT_SOURCES = [
