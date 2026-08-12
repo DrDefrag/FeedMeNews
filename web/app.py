@@ -88,12 +88,17 @@ TIER_RANK_SQL = "CASE source_tier WHEN 'trusted' THEN 0 WHEN 'niche' THEN 1 ELSE
 # Davis" directly - what matters for "do these share an owner" is the
 # ultimate parent, not the intermediate chain). Only sources we actually
 # have verified data for appear here; anything absent is simply not
-# flagged, not assumed independent.
+# flagged, not assumed independent. GamesIndustry.biz added 12 Aug 2026
+# deliberately BECAUSE of its overlap with the IGN Entertainment/Ziff
+# Davis group already represented here - the user's own reasoning:
+# seeing that connection flagged live is the point of this feature, not
+# a reason to avoid a source.
 SOURCE_OWNERSHIP = {
     "IGN": "Ziff Davis",
     "Eurogamer": "Ziff Davis",
     "Rock Paper Shotgun": "Ziff Davis",
     "VG247": "Ziff Davis",
+    "GamesIndustry.biz": "Ziff Davis",
     "PC Gamer": "Future plc",
     "GamesRadar": "Future plc",
     "Polygon": "Valnet",
@@ -114,6 +119,7 @@ ICON_X = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-widt
 ICON_HEART = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.8 1-1a5.5 5.5 0 0 0 0-7.8z"></path></svg>'
 ICON_UP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="6 11 12 5 18 11"></polyline></svg>'
 ICON_SEARCH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>'
+ICON_REFRESH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>'
 
 
 CSS = """
@@ -693,6 +699,24 @@ cursor: pointer;
 text-decoration: underline;
 padding: 0;
 }
+.pull-indicator {
+position: fixed;
+top: -50px;
+left: 50%;
+transform: translateX(-50%) rotate(0deg);
+width: 38px;
+height: 38px;
+border-radius: 50%;
+background: var(--text);
+color: var(--bg);
+display: flex;
+align-items: center;
+justify-content: center;
+z-index: 25;
+opacity: 0;
+box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+}
+.pull-indicator svg { width: 18px; height: 18px; }
 """
 
 CARD_INTERACTIONS_JS = """
@@ -804,6 +828,74 @@ BACK_TO_TOP_HTML = """
   });
   btn.addEventListener("click", function () {
     window.scrollTo({ top: 0, behavior: "smooth" });
+  });
+})();
+</script>
+"""
+
+# Pull-to-refresh (added 12 Aug 2026): the site is entirely server-rendered
+# per request with no client-side polling anywhere, so nothing updates
+# on its own if a tab is left open - a manual reload is the only way to
+# see anything new. This adds the standard mobile gesture rather than
+# relying on the browser's own (inconsistent across browsers) overscroll
+# behavior: track touchstart only when already at scrollY 0 (so it can't
+# trigger mid-scroll), grow/rotate a small indicator proportionally to
+# pull distance past a threshold, then a real window.location.reload()
+# on release if the pull cleared that threshold - a full reload rather
+# than an AJAX partial refresh, since there's no client-only state worth
+# preserving across it (everything meaningful already lives server-side
+# in the database). Included everywhere BACK_TO_TOP_HTML already is.
+# Genuinely can't be verified through browser automation, which has no
+# way to simulate a real touch swipe - verified the code is correct and
+# deployed, not that the gesture itself feels right on an actual phone.
+PULL_TO_REFRESH_HTML = """
+<div class="pull-indicator" id="pullIndicator">""" + ICON_REFRESH + """</div>
+<script>
+(function () {
+  var indicator = document.getElementById("pullIndicator");
+  if (!indicator) return;
+  var startY = null;
+  var threshold = 70;
+  var maxPull = 110;
+  var ready = false;
+
+  document.addEventListener("touchstart", function (e) {
+    if (window.scrollY === 0) {
+      startY = e.touches[0].clientY;
+      ready = false;
+    } else {
+      startY = null;
+    }
+  }, { passive: true });
+
+  document.addEventListener("touchmove", function (e) {
+    if (startY === null) return;
+    var delta = e.touches[0].clientY - startY;
+    if (delta <= 0) {
+      indicator.style.opacity = "0";
+      indicator.style.top = "-50px";
+      ready = false;
+      return;
+    }
+    var pull = Math.min(delta, maxPull);
+    var progress = pull / threshold;
+    indicator.style.opacity = Math.min(progress, 1);
+    indicator.style.top = (pull - 50) + "px";
+    indicator.style.transform = "translateX(-50%) rotate(" + (progress * 360) + "deg)";
+    ready = pull >= threshold;
+  }, { passive: true });
+
+  document.addEventListener("touchend", function () {
+    if (ready) {
+      indicator.style.top = "20px";
+      indicator.style.opacity = "1";
+      window.location.reload();
+    } else {
+      indicator.style.opacity = "0";
+      indicator.style.top = "-50px";
+    }
+    startY = null;
+    ready = false;
   });
 })();
 </script>
@@ -1002,7 +1094,7 @@ Showing stories with 2+ sources{% if hidden_count %} &middot; {{ hidden_count }}
 <p class="meta">Nothing here yet.</p>
 {% endif %}
 </main>
-""" + CARD_INTERACTIONS_JS + BACK_TO_TOP_HTML + """
+""" + CARD_INTERACTIONS_JS + BACK_TO_TOP_HTML + PULL_TO_REFRESH_HTML + """
 </body>
 </html>"""
 
@@ -1031,7 +1123,7 @@ FEED_TEMPLATE = """<!doctype html>
 <main>
 """ + STORY_CARD_LOOP_HTML + """
 </main>
-""" + CARD_INTERACTIONS_JS + BACK_TO_TOP_HTML + """
+""" + CARD_INTERACTIONS_JS + BACK_TO_TOP_HTML + PULL_TO_REFRESH_HTML + """
 </body>
 </html>"""
 
@@ -1090,7 +1182,7 @@ reflects everyone who's used this installation, not a personal account.</p>
 </div>
 {% endif %}
 </main>
-""" + BACK_TO_TOP_HTML + """
+""" + BACK_TO_TOP_HTML + PULL_TO_REFRESH_HTML + """
 </body>
 </html>"""
 
@@ -1116,7 +1208,7 @@ SEARCH_TEMPLATE = """<!doctype html>
 {% endif %}
 """ + STORY_CARD_LOOP_HTML + """
 </main>
-""" + CARD_INTERACTIONS_JS + BACK_TO_TOP_HTML + """
+""" + CARD_INTERACTIONS_JS + BACK_TO_TOP_HTML + PULL_TO_REFRESH_HTML + """
 </body>
 </html>"""
 
@@ -1169,7 +1261,7 @@ STORY_TEMPLATE = """<!doctype html>
 </a>
 {% endfor %}
 </main>
-""" + BACK_TO_TOP_HTML + """
+""" + BACK_TO_TOP_HTML + PULL_TO_REFRESH_HTML + """
 </body>
 </html>"""
 
