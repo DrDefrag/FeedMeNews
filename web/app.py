@@ -19,7 +19,9 @@ DB_URL = os.environ["DATABASE_URL"]
 # affects dimming (is_read below), not whether a story is in the window
 # at all - a read story ages out exactly the same way an unread one does.
 # Search (below) deliberately ignores this window entirely - see
-# fetch_search_results for why.
+# fetch_search_results for why. Topic pages (also below) use the same
+# window as the main feed - unlike search, a topic page is meant to feel
+# like a live, current slice of the feed, not a historical archive.
 FEED_WINDOW_DAYS = 2
 
 # Seconds a discarded card stays in the DOM (dimmed) before actually being
@@ -41,7 +43,7 @@ UNDO_WINDOW_MS = 5000
 # a niche game, one channel covering something), so filtering those the
 # same way would throw out real content, not noise. Nothing is hidden
 # permanently - a plain link reveals every story, single-source included.
-# Not applied to search either, for the same reason.
+# Not applied to search or topics either, for the same reason.
 MIN_SOURCES_DEFAULT = 2
 
 # How many items each horizontal rail shows (added 11 Aug 2026, inspired
@@ -109,6 +111,58 @@ SOURCE_OWNERSHIP = {
     "GameSpot": "Fandom, Inc.",
     "Kotaku": "Keleops",
     "PCGamesN": "NetworkN",
+}
+
+# Topic tiles (added 12 Aug 2026) - the first slice of topic browsing,
+# deliberately source-identity-based rather than full content/entity
+# extraction, which would be a much bigger, more fragile build. A story
+# qualifies for a topic if EITHER at least one of its sources is a
+# dedicated outlet for that topic (regardless of title wording), OR its
+# title matches a simple keyword OR-query - the same tsquery machinery
+# already proven in fetch_search_results, just aimed at a fixed set of
+# terms instead of a user-typed one. "sources" is the primary signal
+# (high precision - Push Square covering something really does mean
+# it's a PlayStation story); "keywords" adds recall for stories from
+# non-platform-specific outlets that are still clearly about that
+# platform. Indie and Industry have no natural keyword equivalent, so
+# they rely on source identity alone - that's fine, both have genuinely
+# dedicated sources now (Indie Informer/Indie Game Reviewer;
+# Game Developer/GamesIndustry.biz). Order here is the display order of
+# the tiles on Main. Xbox has no dedicated subreddit in REDDIT_SOURCES
+# (only r/PS5 and r/NintendoSwitch are platform-specific there) - a real,
+# known gap versus PlayStation/Switch's stronger source coverage, not an
+# oversight.
+TOPICS = {
+    "playstation": {
+        "label": "PlayStation",
+        "sources": ["Push Square", "r/PS5"],
+        "keywords": "playstation | ps5 | ps4",
+    },
+    "xbox": {
+        "label": "Xbox",
+        "sources": ["Pure Xbox"],
+        "keywords": "xbox",
+    },
+    "switch": {
+        "label": "Nintendo Switch",
+        "sources": ["NintendoLife", "r/NintendoSwitch"],
+        "keywords": "nintendo | switch",
+    },
+    "pc": {
+        "label": "PC",
+        "sources": ["PC Gamer", "PCGamesN", "r/pcgaming"],
+        "keywords": "steam",
+    },
+    "indie": {
+        "label": "Indie",
+        "sources": ["The Indie Informer", "Indie Game Reviewer"],
+        "keywords": None,
+    },
+    "industry": {
+        "label": "Industry",
+        "sources": ["Game Developer", "GamesIndustry.biz"],
+        "keywords": None,
+    },
 }
 
 ICON_MAIN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><line x1="7" y1="9" x2="17" y2="9"></line><line x1="7" y1="13" x2="17" y2="13"></line><line x1="7" y1="17" x2="13" y2="17"></line></svg>'
@@ -328,6 +382,11 @@ max-width: 640px;
 margin: 0 auto;
 padding: 0 16px 40px;
 }
+.topic-heading {
+font-size: 18px;
+font-weight: 700;
+padding: 4px 0 14px;
+}
 .rail-section {
 margin-bottom: 22px;
 }
@@ -396,6 +455,20 @@ padding: 2px 8px;
 border-radius: 20px;
 display: inline-block;
 margin-bottom: 6px;
+}
+.topic-tile {
+flex: 0 0 auto;
+scroll-snap-align: start;
+display: flex;
+align-items: center;
+padding: 13px 20px;
+background: var(--card);
+border: 1px solid var(--border);
+border-radius: 12px;
+font-size: 14px;
+font-weight: 600;
+color: var(--text);
+white-space: nowrap;
 }
 .card {
 position: relative;
@@ -920,6 +993,24 @@ TABS_HTML = """
 </div>
 """
 
+# Topics rail (added 12 Aug 2026): unlike the Video/Trending/Reviews rails
+# below, this is pure navigation, not a content preview - it doesn't make
+# any claim about freshness, so it isn't gated by show_rails/hidden during
+# "Most covered" the way those three are. Placed at the very top of
+# <main>, before any content rail, since it's the first decision point
+# ("jump to a specific slice, or just scroll the general feed") rather
+# than something competing with the content below it for attention.
+TOPICS_RAIL_HTML = """
+<div class="rail-section">
+<div class="rail-header"><span class="rail-title">Topics</span></div>
+<div class="rail-scroll">
+{% for key, label in topic_tiles %}
+<a class="topic-tile" href="/topic/{{ key }}">{{ label }}</a>
+{% endfor %}
+</div>
+</div>
+"""
+
 # Three separate rail blocks (added 11 Aug 2026, split out of a single
 # combined RAILS_HTML) so index() below can place each one independently
 # at a different point in the page, rather than all three stacked back
@@ -995,7 +1086,7 @@ REVIEW_RAIL_HTML = """
 # Single-story card markup, kept as its own reusable block so it can be
 # looped over multiple times with different list variables (Main's
 # split-into-parts layout below) or once with a single flat list
-# (Reviews/Video/Search) without duplicating the actual HTML.
+# (Reviews/Video/Search/Topic) without duplicating the actual HTML.
 #
 # blindspot-chip added 12 Aug 2026: flags a story with real multi-source
 # coverage (2+ sources) but zero "trusted"-tier sources - i.e. niche
@@ -1084,7 +1175,7 @@ Showing stories with 2+ sources{% if hidden_count %} &middot; {{ hidden_count }}
 <span><span class="dot" style="background:var(--comm)"></span>Community</span>
 </div>
 <main>
-""" + VIDEO_RAIL_HTML + """
+""" + TOPICS_RAIL_HTML + VIDEO_RAIL_HTML + """
 {% for story in stories_part1 %}""" + CARD_HTML + """{% endfor %}
 """ + TRENDING_RAIL_HTML + """
 {% for story in stories_part2 %}""" + CARD_HTML + """{% endfor %}
@@ -1120,6 +1211,9 @@ FEED_TEMPLATE = """<!doctype html>
 <span><span class="dot" style="background:var(--niche)"></span>Niche</span>
 <span><span class="dot" style="background:var(--comm)"></span>Community</span>
 </div>
+{% if topic_label %}
+<p class="topic-heading" style="max-width:640px;margin:0 auto;padding-left:16px;padding-right:16px;">{{ topic_label }}</p>
+{% endif %}
 <main>
 """ + STORY_CARD_LOOP_HTML + """
 </main>
@@ -1628,6 +1722,107 @@ def fetch_search_results(query):
     return stories, source_count
 
 
+def fetch_topic_stories(topic_key, view="recent"):
+    """Topic pages (added 12 Aug 2026): a story qualifies if EITHER at
+    least one of its sources is a dedicated outlet for the topic
+    (TOPICS[key]["sources"]), OR its title matches a fixed keyword
+    OR-query (TOPICS[key]["keywords"], using real tsquery '|' OR syntax,
+    not plainto_tsquery's implicit AND) - source identity is the primary,
+    high-precision signal; keywords add recall for stories from
+    non-platform-specific outlets that are still clearly on-topic. Uses
+    the same FEED_WINDOW_DAYS/no-MIN_SOURCES_DEFAULT posture as the main
+    feed (a topic page should feel like a live current slice, not an
+    archive) - unlike fetch_search_results, which deliberately ignores
+    both.
+    """
+    topic = TOPICS.get(topic_key)
+    if not topic:
+        return [], 0
+
+    order_by = "n DESC, latest DESC" if view == "covered" else "latest DESC"
+
+    conditions = []
+    params = []
+    if topic.get("sources"):
+        conditions.append("EXISTS (SELECT 1 FROM articles a2 WHERE a2.story_id = s.id AND a2.source = ANY(%s))")
+        params.append(topic["sources"])
+    if topic.get("keywords"):
+        conditions.append("to_tsvector('english', s.title) @@ to_tsquery('english', %s)")
+        params.append(topic["keywords"])
+    topic_where = "AND (" + " OR ".join(conditions) + ")"
+
+    conn = psycopg2.connect(DB_URL)
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(
+        f"""
+        SELECT
+            s.id, s.title, s.opencritic_score, s.opencritic_tier, s.read_at, s.liked_at,
+            count(*) AS n,
+            count(*) FILTER (WHERE a.source_tier = 'trusted') AS trusted_n,
+            count(*) FILTER (WHERE a.source_tier = 'niche') AS niche_n,
+            count(*) FILTER (WHERE a.source_tier = 'community') AS community_n,
+            max(COALESCE(a.published_at, a.fetched_at)) AS latest
+        FROM stories s
+        JOIN articles a ON a.story_id = s.id
+        WHERE s.dismissed_at IS NULL
+        {topic_where}
+        GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier, s.read_at, s.liked_at
+        HAVING max(COALESCE(a.published_at, a.fetched_at)) > now() - interval '{FEED_WINDOW_DAYS} days'
+        ORDER BY (s.read_at IS NOT NULL), {order_by}
+        LIMIT 30
+        """,
+        params,
+    )
+    story_rows = cur.fetchall()
+
+    stories = []
+    now = datetime.datetime.now(datetime.timezone.utc)
+    for row in story_rows:
+        cur.execute(
+            "SELECT DISTINCT source, source_tier FROM articles WHERE story_id = %s ORDER BY source",
+            (row["id"],),
+        )
+        sources = [(r["source"], r["source_tier"]) for r in cur.fetchall()]
+
+        cur.execute(
+            f"""
+            SELECT image_url FROM articles
+            WHERE story_id = %s AND image_url IS NOT NULL
+            ORDER BY {TIER_RANK_SQL}
+            LIMIT 1
+            """,
+            (row["id"],),
+        )
+        image_row = cur.fetchone()
+        image_url = image_row["image_url"] if image_row else None
+
+        delta = (now - row["latest"]).total_seconds() if row["latest"] else 0
+        stories.append({
+            "id": row["id"],
+            "title": row["title"],
+            "n": row["n"],
+            "trusted_n": row["trusted_n"],
+            "niche_n": row["niche_n"],
+            "community_n": row["community_n"],
+            "sources": sources,
+            "image_url": image_url,
+            "time_ago": humanize(delta),
+            "opencritic_score": row["opencritic_score"],
+            "opencritic_tier": row["opencritic_tier"],
+            "is_read": row["read_at"] is not None,
+            "is_liked": row["liked_at"] is not None,
+            "is_blindspot": row["trusted_n"] == 0 and row["n"] >= 2,
+            "ownership_note": compute_ownership_note(sources),
+        })
+
+    cur.execute("SELECT count(DISTINCT source) FROM articles")
+    source_count = cur.fetchone()["count"]
+
+    cur.close()
+    conn.close()
+    return stories, source_count
+
+
 @app.route("/")
 def index():
     view = valid_view()
@@ -1664,6 +1859,7 @@ def index():
         toggle_url=build_url("/", view=view, show_all=not show_all),
         show_filter_toggle=True,
         show_rails=show_rails, trending=trending, review_rail=review_rail, video_rail=video_rail,
+        topic_tiles=[(key, t["label"]) for key, t in TOPICS.items()],
     )
 
 
@@ -1688,6 +1884,22 @@ def video():
         active_tab="video", view=view,
         recent_url=build_url("/video", view="recent"),
         covered_url=build_url("/video", view="covered"),
+    )
+
+
+@app.route("/topic/<key>")
+def topic(key):
+    topic_def = TOPICS.get(key)
+    if not topic_def:
+        return "Topic not found", 404
+    view = valid_view()
+    stories, source_count = fetch_topic_stories(key, view=view)
+    return render_template_string(
+        FEED_TEMPLATE, stories=stories, source_count=source_count,
+        active_tab=None, view=view,
+        recent_url=build_url(f"/topic/{key}", view="recent"),
+        covered_url=build_url(f"/topic/{key}", view="covered"),
+        topic_label=topic_def["label"],
     )
 
 
