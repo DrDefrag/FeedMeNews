@@ -73,6 +73,39 @@ WORD_STOPWORDS = {
 # hotlinked to the outlet's own URL, never downloaded or re-hosted here.
 TIER_RANK_SQL = "CASE source_tier WHEN 'trusted' THEN 0 WHEN 'niche' THEN 1 ELSE 2 END"
 
+# Ultimate parent company per outlet - verified live against Wikipedia on
+# 12 Aug 2026, deliberately not written from memory. Two real, current
+# changes memory alone would have gotten wrong: Polygon was sold from Vox
+# Media to Valnet in 2025, and Kotaku was sold from G/O Media to the
+# Swiss firm Keleops, also in 2025. The single biggest finding: Gamer
+# Network (Eurogamer, Rock Paper Shotgun, VG247) was bought by IGN
+# Entertainment in 2024 - meaning IGN itself and three of our "niche"
+# sources now share the same ultimate owner, which is exactly the kind
+# of thing this feature exists to surface. Intermediate holding
+# companies are collapsed to the ultimate parent (e.g. Eurogamer's
+# immediate parent is Gamer Network, but Gamer Network's own parent is
+# IGN Entertainment/Ziff Davis, so Eurogamer is recorded under "Ziff
+# Davis" directly - what matters for "do these share an owner" is the
+# ultimate parent, not the intermediate chain). Only sources we actually
+# have verified data for appear here; anything absent is simply not
+# flagged, not assumed independent.
+SOURCE_OWNERSHIP = {
+    "IGN": "Ziff Davis",
+    "Eurogamer": "Ziff Davis",
+    "Rock Paper Shotgun": "Ziff Davis",
+    "VG247": "Ziff Davis",
+    "PC Gamer": "Future plc",
+    "GamesRadar": "Future plc",
+    "Polygon": "Valnet",
+    "TheGamer": "Valnet",
+    "NintendoLife": "Hookshot Media",
+    "Push Square": "Hookshot Media",
+    "Pure Xbox": "Hookshot Media",
+    "GameSpot": "Fandom, Inc.",
+    "Kotaku": "Keleops",
+    "PCGamesN": "NetworkN",
+}
+
 ICON_MAIN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><line x1="7" y1="9" x2="17" y2="9"></line><line x1="7" y1="13" x2="17" y2="13"></line><line x1="7" y1="17" x2="13" y2="17"></line></svg>'
 ICON_REVIEWS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15 9 22 9.5 17 14.5 18.5 22 12 18 5.5 22 7 14.5 2 9.5 9 9"></polygon></svg>'
 ICON_VIDEO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><polygon points="10 8 16 12 10 16" fill="currentColor" stroke="none"></polygon></svg>'
@@ -464,6 +497,12 @@ display: inline-block;
 margin-bottom: 10px;
 background: var(--fair-bg);
 color: var(--fair-fg);
+}
+.ownership-note {
+font-size: 11.5px;
+color: var(--text-secondary);
+font-style: italic;
+margin: 8px 0 0;
 }
 .back {
 display: block;
@@ -873,6 +912,12 @@ REVIEW_RAIL_HTML = """
 # coverage" rather than "no press coverage" - niche outlets are real
 # journalism too, just a different tier in our system; the chip flags
 # an absence of the *trusted* tier specifically, not press in general.
+#
+# ownership-note added 12 Aug 2026: when 2+ of a story's sources share a
+# known ultimate parent company (see SOURCE_OWNERSHIP above), a small
+# italic line names them - deliberately lighter-weight than the chips
+# above (plain text, not another colored badge) since most stories won't
+# trigger it and it shouldn't compete visually with score/blindspot.
 CARD_HTML = """
 <div class="card {{ 'read' if story.is_read else '' }}">
 <button class="discard-btn" data-action="/story/{{ story.id }}/discard" data-id="{{ story.id }}" aria-label="Discard">""" + ICON_X + """</button>
@@ -899,6 +944,9 @@ CARD_HTML = """
 <span class="chip" style="background:var(--{{ tier }}-bg); color:var(--{{ tier }}-fg);">{{ src }}</span>
 {% endfor %}
 </div>
+{% if story.ownership_note %}
+<p class="ownership-note">{{ story.ownership_note }}</p>
+{% endif %}
 </a>
 </div>
 """
@@ -1096,6 +1144,9 @@ STORY_TEMPLATE = """<!doctype html>
 {% if is_blindspot %}
 <span class="blindspot-chip">Not yet in mainstream coverage</span>
 {% endif %}
+{% if ownership_note %}
+<p class="ownership-note">{{ ownership_note }}</p>
+{% endif %}
 {% if story.opencritic_score and story.opencritic_score > 0 %}
 <div class="score-block">
 <div class="score-circle" style="background:var(--{{ (story.opencritic_tier or 'strong')|lower }}-bg); color:var(--{{ (story.opencritic_tier or 'strong')|lower }}-fg);">{{ story.opencritic_score|round|int }}</div>
@@ -1144,6 +1195,28 @@ def humanize_delay(delta_seconds):
     if delta_seconds < 86400:
         return f"{int(delta_seconds // 3600)}h"
     return f"{int(delta_seconds // 86400)}d"
+
+
+def compute_ownership_note(sources):
+    """Given a list of (source, tier) tuples for a story, check whether
+    2+ of them share a known ultimate parent company (SOURCE_OWNERSHIP
+    above). Returns a short human sentence, or None if nothing to flag -
+    most stories won't trigger this, and that's fine; only sources we
+    have verified data for are ever considered, so an unmapped outlet is
+    simply silent rather than assumed independent.
+    """
+    groups = {}
+    for name, _tier in sources:
+        parent = SOURCE_OWNERSHIP.get(name)
+        if parent:
+            groups.setdefault(parent, []).append(name)
+    for parent, names in groups.items():
+        if len(names) < 2:
+            continue
+        if len(names) == 2:
+            return f"{names[0]} and {names[1]} are both owned by {parent}"
+        return f"{', '.join(names[:-1])}, and {names[-1]} are all owned by {parent}"
+    return None
 
 
 def strip_html(text):
@@ -1330,6 +1403,7 @@ def fetch_stories(tab, view, show_all=False):
             "is_read": row["read_at"] is not None,
             "is_liked": row["liked_at"] is not None,
             "is_blindspot": row["trusted_n"] == 0 and row["n"] >= 2,
+            "ownership_note": compute_ownership_note(sources),
         })
 
     hidden_count = 0
@@ -1451,6 +1525,7 @@ def fetch_search_results(query):
                 "is_read": row["read_at"] is not None,
                 "is_liked": row["liked_at"] is not None,
                 "is_blindspot": row["trusted_n"] == 0 and row["n"] >= 2,
+                "ownership_note": compute_ownership_note(sources),
             })
 
     cur.execute("SELECT count(DISTINCT source) FROM articles")
@@ -1712,6 +1787,7 @@ def story_detail(story_id):
     niche_n = sum(1 for a in articles if a["source_tier"] == "niche")
     community_n = sum(1 for a in articles if a["source_tier"] == "community")
     is_blindspot = trusted_n == 0 and len(articles) >= 2
+    ownership_note = compute_ownership_note([(a["source"], a["source_tier"]) for a in articles])
 
     tier_rank = {"trusted": 0, "niche": 1, "community": 2}
     ranked = sorted(articles, key=lambda a: (tier_rank.get(a["source_tier"], 3), -len(a["summary"] or "")))
@@ -1759,6 +1835,7 @@ def story_detail(story_id):
         synopsis=synopsis,
         hero_image=hero_image,
         is_blindspot=is_blindspot,
+        ownership_note=ownership_note,
         n=len(articles),
         trusted_n=trusted_n,
         niche_n=niche_n,
