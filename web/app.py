@@ -455,6 +455,16 @@ border-radius: 20px;
 display: inline-block;
 margin-bottom: 10px;
 }
+.blindspot-chip {
+font-size: 12px;
+font-weight: 700;
+padding: 4px 10px;
+border-radius: 20px;
+display: inline-block;
+margin-bottom: 10px;
+background: var(--fair-bg);
+color: var(--fair-fg);
+}
 .back {
 display: block;
 font-size: 14px;
@@ -525,6 +535,15 @@ padding: 3px 9px;
 border-radius: 20px;
 display: inline-block;
 margin-bottom: 8px;
+}
+.timeline-badge {
+font-size: 11px;
+font-weight: 600;
+color: var(--text-secondary);
+margin-left: 6px;
+}
+.timeline-badge.timeline-first {
+color: var(--niche);
 }
 .source-row .src-title {
 font-size: 14.5px;
@@ -778,7 +797,7 @@ TABS_HTML = """
 # to converge, or a new review to actually publish), so stacking all
 # three rails up front meant a returning user's first impression was
 # three mostly-unchanged sections before reaching any real movement.
-# Video updates the most (9 channels posting regularly) and gets
+# Video updates the most (10 channels posting regularly) and gets
 # promoted to the very top for exactly that reason; the slower two are
 # spread further down to break up the vertical scroll instead of
 # front-loading it.
@@ -846,6 +865,14 @@ REVIEW_RAIL_HTML = """
 # looped over multiple times with different list variables (Main's
 # split-into-parts layout below) or once with a single flat list
 # (Reviews/Video/Search) without duplicating the actual HTML.
+#
+# blindspot-chip added 12 Aug 2026: flags a story with real multi-source
+# coverage (2+ sources) but zero "trusted"-tier sources - i.e. niche
+# and/or community outlets are covering something that hasn't (yet)
+# reached mainstream press. Deliberately worded "not yet in mainstream
+# coverage" rather than "no press coverage" - niche outlets are real
+# journalism too, just a different tier in our system; the chip flags
+# an absence of the *trusted* tier specifically, not press in general.
 CARD_HTML = """
 <div class="card {{ 'read' if story.is_read else '' }}">
 <button class="discard-btn" data-action="/story/{{ story.id }}/discard" data-id="{{ story.id }}" aria-label="Discard">""" + ICON_X + """</button>
@@ -853,6 +880,9 @@ CARD_HTML = """
 <a class="card-link with-buttons" href="/story/{{ story.id }}">
 {% if story.image_url %}
 <img class="card-image" src="{{ story.image_url }}" loading="lazy" alt="">
+{% endif %}
+{% if story.is_blindspot %}
+<span class="blindspot-chip">Not yet in mainstream coverage</span><br>
 {% endif %}
 {% if story.opencritic_score and story.opencritic_score > 0 %}
 <span class="score-chip" style="background:var(--{{ (story.opencritic_tier or 'strong')|lower }}-bg); color:var(--{{ (story.opencritic_tier or 'strong')|lower }}-fg);">{{ story.opencritic_score|round|int }}{% if story.opencritic_tier %} &middot; {{ story.opencritic_tier }}{% endif %}</span><br>
@@ -1063,6 +1093,9 @@ STORY_TEMPLATE = """<!doctype html>
 {% if niche_n %}<div style="flex:{{ niche_n }};background:var(--niche);"></div>{% endif %}
 {% if community_n %}<div style="flex:{{ community_n }};background:var(--comm);"></div>{% endif %}
 </div>
+{% if is_blindspot %}
+<span class="blindspot-chip">Not yet in mainstream coverage</span>
+{% endif %}
 {% if story.opencritic_score and story.opencritic_score > 0 %}
 <div class="score-block">
 <div class="score-circle" style="background:var(--{{ (story.opencritic_tier or 'strong')|lower }}-bg); color:var(--{{ (story.opencritic_tier or 'strong')|lower }}-fg);">{{ story.opencritic_score|round|int }}</div>
@@ -1079,6 +1112,7 @@ STORY_TEMPLATE = """<!doctype html>
 {% for a in articles %}
 <a class="source-row" href="{{ a.url }}" target="_blank" rel="noopener">
 <span class="src-name" style="background:var(--{{ a.source_tier }}-bg); color:var(--{{ a.source_tier }}-fg);">{{ a.source }}</span>
+{% if a.timeline_label %}<span class="timeline-badge {{ 'timeline-first' if loop.first else '' }}">{{ a.timeline_label }}</span>{% endif %}
 <p class="src-title">{{ a.title }}</p>
 <p class="src-meta">{{ a.time_ago }} &middot; <span style="text-decoration:underline;">Read on {{ a.source }} &#8599;</span></p>
 </a>
@@ -1095,6 +1129,21 @@ def humanize(delta_seconds):
     if delta_seconds < 86400:
         return f"{int(delta_seconds // 3600)}h ago"
     return f"{int(delta_seconds // 86400)}d ago"
+
+
+def humanize_delay(delta_seconds):
+    """Format a gap between two timestamps for the coverage-timeline
+    badges on the story detail page - e.g. "+47m", "+3h", "+2d". Distinct
+    from humanize() above, which formats "how long ago from now" - this
+    formats "how long after some other event," a different question.
+    """
+    if delta_seconds < 60:
+        return "under a minute"
+    if delta_seconds < 3600:
+        return f"{int(delta_seconds // 60)}m"
+    if delta_seconds < 86400:
+        return f"{int(delta_seconds // 3600)}h"
+    return f"{int(delta_seconds // 86400)}d"
 
 
 def strip_html(text):
@@ -1280,6 +1329,7 @@ def fetch_stories(tab, view, show_all=False):
             "opencritic_tier": row["opencritic_tier"],
             "is_read": row["read_at"] is not None,
             "is_liked": row["liked_at"] is not None,
+            "is_blindspot": row["trusted_n"] == 0 and row["n"] >= 2,
         })
 
     hidden_count = 0
@@ -1400,6 +1450,7 @@ def fetch_search_results(query):
                 "opencritic_tier": row["opencritic_tier"],
                 "is_read": row["read_at"] is not None,
                 "is_liked": row["liked_at"] is not None,
+                "is_blindspot": row["trusted_n"] == 0 and row["n"] >= 2,
             })
 
     cur.execute("SELECT count(DISTINCT source) FROM articles")
@@ -1660,6 +1711,7 @@ def story_detail(story_id):
     trusted_n = sum(1 for a in articles if a["source_tier"] == "trusted")
     niche_n = sum(1 for a in articles if a["source_tier"] == "niche")
     community_n = sum(1 for a in articles if a["source_tier"] == "community")
+    is_blindspot = trusted_n == 0 and len(articles) >= 2
 
     tier_rank = {"trusted": 0, "niche": 1, "community": 2}
     ranked = sorted(articles, key=lambda a: (tier_rank.get(a["source_tier"], 3), -len(a["summary"] or "")))
@@ -1676,6 +1728,25 @@ def story_detail(story_id):
             hero_image = a["image_url"]
             break
 
+    # Coverage timeline (added 12 Aug 2026): articles is already ordered
+    # ASC by published_at from the query above, so articles[0] is
+    # genuinely the earliest. Reuses that same ordering rather than
+    # building a separate visualization - the existing "Covered by" list
+    # order already IS the timeline; these badges just make the
+    # relationship explicit instead of implicit.
+    first_published = articles[0]["published_at"] if articles else None
+    show_timeline = len(articles) > 1
+    for i, a in enumerate(articles):
+        if not show_timeline:
+            a["timeline_label"] = None
+        elif i == 0:
+            a["timeline_label"] = "First to cover this"
+        elif a["published_at"] and first_published:
+            delay = (a["published_at"] - first_published).total_seconds()
+            a["timeline_label"] = f"+{humanize_delay(delay)} after first"
+        else:
+            a["timeline_label"] = None
+
     now = datetime.datetime.now(datetime.timezone.utc)
     for a in articles:
         delta = (now - a["published_at"]).total_seconds() if a["published_at"] else 0
@@ -1687,6 +1758,7 @@ def story_detail(story_id):
         articles=articles,
         synopsis=synopsis,
         hero_image=hero_image,
+        is_blindspot=is_blindspot,
         n=len(articles),
         trusted_n=trusted_n,
         niche_n=niche_n,
