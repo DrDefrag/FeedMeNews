@@ -64,6 +64,15 @@ REDDIT_SOURCES = [
 # walkthrough-pattern matches in the sample checked. Good reminder that
 # a channel's general reputation isn't a substitute for checking its
 # actual current output before deciding.
+#
+# DF Clips added 12 Aug 2026 - Digital Foundry's own secondary channel
+# ("Clips, reaction and highlights from Digital Foundry" per its own
+# description), tiered "trusted" to match the main Digital Foundry
+# channel since it's the same institutional outlet, not a separate
+# creator. Checked live first same as always: 6 most recent titles were
+# all genuine tech/hardware/gaming commentary ("Half-Life Alyx Running
+# On Meta Quest 3?!", "PC Settings Tweaking vs Console Curation"), zero
+# WALKTHROUGH_PATTERN matches, posting multiple times a day.
 VIDEO_SOURCES = [
     {"name": "IGN", "tier": "trusted", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCKy1dAqELo0zrOtPkf0eTMw"},
     {"name": "GameSpot", "tier": "trusted", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCbu2SsF-Or3Rsn3NxqODImw"},
@@ -74,6 +83,7 @@ VIDEO_SOURCES = [
     {"name": "Polygon", "tier": "trusted", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCuVxaQDraOja6xKidcmoufA"},
     {"name": "Fextralife", "tier": "niche", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UClkUHCETNUph8vM-4gQpwUA"},
     {"name": "Bellular News", "tier": "niche", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC3nPaf5MeeDTHA2JN7clidg"},
+    {"name": "DF Clips", "tier": "trusted", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCLdBr5f6RcP6l_TAP4GkhDQ"},
 ]
 
 HEADERS = {"User-Agent": "gaming-news-aggregator/0.1 (personal project)"}
