@@ -24,11 +24,14 @@ DB_URL = os.environ["DATABASE_URL"]
 # like a live, current slice of the feed, not a historical archive.
 FEED_WINDOW_DAYS = 2
 
-# Seconds a discarded card stays in the DOM (dimmed) before actually being
-# removed, giving the Undo toast below a real window to act in. The
-# server-side dismissed_at is set immediately on discard regardless - this
-# delay is purely cosmetic, giving the user a chance to reverse the visual
-# removal before it's gone with no trace.
+# Milliseconds the Undo option stays available after a discard - see
+# CARD_INTERACTIONS_JS below. This used to also control how long the
+# card visually sat there dimmed before collapsing, which made every
+# discard feel like it took several seconds even though the actual
+# server round-trip was instant. Restructured 12 Aug 2026 so the card
+# collapses immediately on server confirmation instead - this constant
+# now purely controls the Undo safety-net window, with no effect on how
+# quickly a discard feels.
 UNDO_WINDOW_MS = 5000
 
 # Minimum source count for a story to show by default on the Main tab.
@@ -483,14 +486,11 @@ border: 1px solid var(--border);
 border-radius: 14px;
 padding: 16px;
 margin-bottom: 14px;
-transition: opacity 0.2s ease, transform 0.2s ease, max-height 0.32s ease, margin-bottom 0.32s ease, padding 0.32s ease;
+transition: opacity 0.15s ease, transform 0.15s ease, max-height 0.22s ease, margin-bottom 0.22s ease, padding 0.22s ease;
 overflow: hidden;
 }
 .card.read {
 opacity: 0.5;
-}
-.card.pending-remove {
-opacity: 0.35;
 }
 .card-image {
 display: block;
@@ -828,13 +828,12 @@ CARD_INTERACTIONS_JS = """
     }, """ + str(UNDO_WINDOW_MS) + """);
   }
 
-  function collapseAndRemove(card) {
-    // Rather than yanking the card's full height out of the layout in
-    // one instant (which snaps everything below it upward with no
-    // warning - jarring if the user has scrolled past it already), lock
-    // in its current height explicitly, then animate height/margin/
-    // padding down to zero alongside the fade, so any layout shift
-    // happens smoothly and visibly rather than as a sudden jump.
+  function collapseCard(card) {
+    // Collapses the card immediately on server confirmation of the
+    // discard - previously the card just sat there dimmed for the full
+    // UNDO_WINDOW_MS before this ran, making every discard feel like it
+    // took several seconds. pointerEvents is disabled so a collapsed
+    // (but not-yet-removed) card can't accidentally catch a tap.
     var height = card.offsetHeight;
     card.style.maxHeight = height + "px";
     card.offsetHeight; // force a reflow so the browser registers the starting height
@@ -844,7 +843,20 @@ CARD_INTERACTIONS_JS = """
     card.style.marginBottom = "0px";
     card.style.paddingTop = "0px";
     card.style.paddingBottom = "0px";
-    setTimeout(function () { card.remove(); }, 340);
+    card.style.pointerEvents = "none";
+  }
+
+  function restoreCard(card) {
+    // Undo just clears the inline styles collapseCard set - the card
+    // never actually left the DOM, so this restores it exactly in place
+    // with no need to track or reinsert anything.
+    card.style.pointerEvents = "";
+    card.style.maxHeight = "";
+    card.style.opacity = "";
+    card.style.transform = "";
+    card.style.marginBottom = "";
+    card.style.paddingTop = "";
+    card.style.paddingBottom = "";
   }
 
   document.addEventListener("click", function (e) {
@@ -857,13 +869,13 @@ CARD_INTERACTIONS_JS = """
       var storyId = discardBtn.getAttribute("data-id");
       fetch(url, { method: "POST" }).then(function (r) {
         if (!r.ok) return;
-        card.classList.add("pending-remove");
+        collapseCard(card);
         var removeTimeout = setTimeout(function () {
-          collapseAndRemove(card);
+          card.remove();
         }, """ + str(UNDO_WINDOW_MS) + """);
         showToast("Story discarded", function () {
           clearTimeout(removeTimeout);
-          card.classList.remove("pending-remove");
+          restoreCard(card);
           fetch("/story/" + storyId + "/undiscard", { method: "POST" });
         });
       });
