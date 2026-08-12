@@ -470,6 +470,11 @@ font-weight: 600;
 color: var(--text);
 white-space: nowrap;
 }
+.topic-tile.active {
+background: var(--text);
+color: var(--bg);
+border-color: var(--text);
+}
 .card {
 position: relative;
 display: block;
@@ -993,19 +998,25 @@ TABS_HTML = """
 </div>
 """
 
-# Topics rail (added 12 Aug 2026): unlike the Video/Trending/Reviews rails
-# below, this is pure navigation, not a content preview - it doesn't make
-# any claim about freshness, so it isn't gated by show_rails/hidden during
-# "Most covered" the way those three are. Placed at the very top of
-# <main>, before any content rail, since it's the first decision point
-# ("jump to a specific slice, or just scroll the general feed") rather
-# than something competing with the content below it for attention.
+# Topics rail (added 12 Aug 2026, fixed same day): unlike the
+# Video/Trending/Reviews rails below, this is pure navigation, not a
+# content preview - it doesn't make any claim about freshness, so it
+# isn't gated by show_rails/hidden during "Most covered" the way those
+# three are. Originally only included in MAIN_TEMPLATE; the user
+# immediately caught the real problem with that - clicking into a topic
+# page (which shares FEED_TEMPLATE with Reviews/Video) meant the rail,
+# and with it any way to jump to a *different* topic, vanished entirely.
+# Fixed by including this in FEED_TEMPLATE too, so it's now present on
+# Reviews/Video/every topic page - not just where a topic was first
+# clicked from. active_topic (the current page's topic key, None
+# everywhere except topic pages themselves) highlights whichever tile
+# you're currently on, same idea as TABS_HTML's active state.
 TOPICS_RAIL_HTML = """
 <div class="rail-section">
 <div class="rail-header"><span class="rail-title">Topics</span></div>
 <div class="rail-scroll">
 {% for key, label in topic_tiles %}
-<a class="topic-tile" href="/topic/{{ key }}">{{ label }}</a>
+<a class="topic-tile {{ 'active' if key == active_topic else '' }}" href="/topic/{{ key }}">{{ label }}</a>
 {% endfor %}
 </div>
 </div>
@@ -1210,6 +1221,9 @@ FEED_TEMPLATE = """<!doctype html>
 <span><span class="dot" style="background:var(--trust)"></span>Trusted</span>
 <span><span class="dot" style="background:var(--niche)"></span>Niche</span>
 <span><span class="dot" style="background:var(--comm)"></span>Community</span>
+</div>
+<div style="max-width:640px;margin:0 auto;padding:0 16px;">
+""" + TOPICS_RAIL_HTML + """
 </div>
 {% if topic_label %}
 <p class="topic-heading" style="max-width:640px;margin:0 auto;padding-left:16px;padding-right:16px;">{{ topic_label }}</p>
@@ -1429,6 +1443,10 @@ def build_url(base_path, view="recent", show_all=False):
     if not params:
         return base_path
     return base_path + "?" + "&".join(params)
+
+
+def all_topic_tiles():
+    return [(key, t["label"]) for key, t in TOPICS.items()]
 
 
 def fetch_rail(kind):
@@ -1859,7 +1877,7 @@ def index():
         toggle_url=build_url("/", view=view, show_all=not show_all),
         show_filter_toggle=True,
         show_rails=show_rails, trending=trending, review_rail=review_rail, video_rail=video_rail,
-        topic_tiles=[(key, t["label"]) for key, t in TOPICS.items()],
+        topic_tiles=all_topic_tiles(), active_topic=None,
     )
 
 
@@ -1872,6 +1890,7 @@ def reviews():
         active_tab="reviews", view=view,
         recent_url=build_url("/reviews", view="recent"),
         covered_url=build_url("/reviews", view="covered"),
+        topic_tiles=all_topic_tiles(), active_topic=None, topic_label=None,
     )
 
 
@@ -1884,6 +1903,7 @@ def video():
         active_tab="video", view=view,
         recent_url=build_url("/video", view="recent"),
         covered_url=build_url("/video", view="covered"),
+        topic_tiles=all_topic_tiles(), active_topic=None, topic_label=None,
     )
 
 
@@ -1900,6 +1920,7 @@ def topic(key):
         recent_url=build_url(f"/topic/{key}", view="recent"),
         covered_url=build_url(f"/topic/{key}", view="covered"),
         topic_label=topic_def["label"],
+        topic_tiles=all_topic_tiles(), active_topic=key,
     )
 
 
