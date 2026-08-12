@@ -770,8 +770,38 @@ TABS_HTML = """
 </div>
 """
 
-RAILS_HTML = """
-{% if show_rails %}
+# Three separate rail blocks (added 11 Aug 2026, split out of a single
+# combined RAILS_HTML) so index() below can place each one independently
+# at a different point in the page, rather than all three stacked back
+# to back at the very top. Reasoning: Trending and Latest reviews update
+# far less often than the feed itself does (a story needs many outlets
+# to converge, or a new review to actually publish), so stacking all
+# three rails up front meant a returning user's first impression was
+# three mostly-unchanged sections before reaching any real movement.
+# Video updates the most (9 channels posting regularly) and gets
+# promoted to the very top for exactly that reason; the slower two are
+# spread further down to break up the vertical scroll instead of
+# front-loading it.
+VIDEO_RAIL_HTML = """
+{% if video_rail %}
+<div class="rail-section">
+<div class="rail-header"><span class="rail-title">New video</span><a class="rail-see-all" href="/video">See all &rarr;</a></div>
+<div class="rail-scroll">
+{% for item in video_rail %}
+<a class="rail-card" href="/story/{{ item.id }}">
+{% if item.image_url %}<img class="rail-card-image" src="{{ item.image_url }}" loading="lazy" alt="">{% endif %}
+<div class="rail-card-body">
+<p class="rail-card-title">{{ item.title }}</p>
+<p class="rail-card-meta">{{ item.time_ago }}</p>
+</div>
+</a>
+{% endfor %}
+</div>
+</div>
+{% endif %}
+"""
+
+TRENDING_RAIL_HTML = """
 {% if trending %}
 <div class="rail-section">
 <div class="rail-header"><span class="rail-title">Trending</span></div>
@@ -788,6 +818,9 @@ RAILS_HTML = """
 </div>
 </div>
 {% endif %}
+"""
+
+REVIEW_RAIL_HTML = """
 {% if review_rail %}
 <div class="rail-section">
 <div class="rail-header"><span class="rail-title">Latest reviews</span><a class="rail-see-all" href="/reviews">See all &rarr;</a></div>
@@ -807,27 +840,13 @@ RAILS_HTML = """
 </div>
 </div>
 {% endif %}
-{% if video_rail %}
-<div class="rail-section">
-<div class="rail-header"><span class="rail-title">New video</span><a class="rail-see-all" href="/video">See all &rarr;</a></div>
-<div class="rail-scroll">
-{% for item in video_rail %}
-<a class="rail-card" href="/story/{{ item.id }}">
-{% if item.image_url %}<img class="rail-card-image" src="{{ item.image_url }}" loading="lazy" alt="">{% endif %}
-<div class="rail-card-body">
-<p class="rail-card-title">{{ item.title }}</p>
-<p class="rail-card-meta">{{ item.time_ago }}</p>
-</div>
-</a>
-{% endfor %}
-</div>
-</div>
-{% endif %}
-{% endif %}
 """
 
-STORY_CARD_LOOP_HTML = """
-{% for story in stories %}
+# Single-story card markup, kept as its own reusable block so it can be
+# looped over multiple times with different list variables (Main's
+# split-into-parts layout below) or once with a single flat list
+# (Reviews/Video/Search) without duplicating the actual HTML.
+CARD_HTML = """
 <div class="card {{ 'read' if story.is_read else '' }}">
 <button class="discard-btn" data-action="/story/{{ story.id }}/discard" data-id="{{ story.id }}" aria-label="Discard">""" + ICON_X + """</button>
 <button class="like-btn {{ 'liked' if story.is_liked else '' }}" data-action="/story/{{ story.id }}/like" aria-label="Like">""" + ICON_HEART + """</button>
@@ -852,13 +871,18 @@ STORY_CARD_LOOP_HTML = """
 </div>
 </a>
 </div>
+"""
+
+STORY_CARD_LOOP_HTML = """
+{% for story in stories %}
+""" + CARD_HTML + """
 {% endfor %}
 {% if not stories %}
 <p class="meta">Nothing here yet.</p>
 {% endif %}
 """
 
-FEED_TEMPLATE = """<!doctype html>
+MAIN_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -890,7 +914,44 @@ Showing stories with 2+ sources{% if hidden_count %} &middot; {{ hidden_count }}
 <span><span class="dot" style="background:var(--comm)"></span>Community</span>
 </div>
 <main>
-""" + RAILS_HTML + STORY_CARD_LOOP_HTML + """
+""" + VIDEO_RAIL_HTML + """
+{% for story in stories_part1 %}""" + CARD_HTML + """{% endfor %}
+""" + TRENDING_RAIL_HTML + """
+{% for story in stories_part2 %}""" + CARD_HTML + """{% endfor %}
+""" + REVIEW_RAIL_HTML + """
+{% for story in stories_part3 %}""" + CARD_HTML + """{% endfor %}
+{% if not stories %}
+<p class="meta">Nothing here yet.</p>
+{% endif %}
+</main>
+""" + CARD_INTERACTIONS_JS + BACK_TO_TOP_HTML + """
+</body>
+</html>"""
+
+FEED_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FeedMeNews</title>
+<style>""" + CSS + """</style>
+</head>
+<body>
+""" + HEADER_HTML + """
+<div class="sticky-nav">
+""" + TABS_HTML + """
+<div class="segmented">
+<a href="{{ recent_url }}" class="segmented-option {{ 'active' if view == 'recent' else '' }}">Most recent</a>
+<a href="{{ covered_url }}" class="segmented-option {{ 'active' if view == 'covered' else '' }}">Most covered</a>
+</div>
+</div>
+<div class="legend">
+<span><span class="dot" style="background:var(--trust)"></span>Trusted</span>
+<span><span class="dot" style="background:var(--niche)"></span>Niche</span>
+<span><span class="dot" style="background:var(--comm)"></span>Community</span>
+</div>
+<main>
+""" + STORY_CARD_LOOP_HTML + """
 </main>
 """ + CARD_INTERACTIONS_JS + BACK_TO_TOP_HTML + """
 </body>
@@ -1063,9 +1124,9 @@ def build_url(base_path, view="recent", show_all=False):
 
 
 def fetch_rail(kind):
-    """A short, glanceable preview strip for the Main page - inspired by
-    Ground News's homepage rails. Deliberately not a replacement for the
-    full Reviews/Video tabs: short (RAIL_LIMIT items), no discard/like
+    """A short, glanceable preview strip - inspired by Ground News's
+    homepage rails. Deliberately not a replacement for the full
+    Reviews/Video tabs: short (RAIL_LIMIT items), no discard/like
     interactions, just a teaser with a "See all" link through to the
     real thing. "trending" spans all content types, sorted purely by
     how many independent sources are on a story - the same signal
@@ -1360,13 +1421,25 @@ def index():
         trending = fetch_rail("trending")
         review_rail = fetch_rail("reviews")
         video_rail = fetch_rail("video")
+        # Split into three chunks so the rails above can be interspersed
+        # through the list (video rail, then part1, trending rail, then
+        # part2, reviews rail, then part3) instead of all three rails
+        # sitting stacked before any real story content - see
+        # VIDEO_RAIL_HTML's comment for the reasoning.
+        stories_part1 = stories[:10]
+        stories_part2 = stories[10:20]
+        stories_part3 = stories[20:]
     else:
         trending = None
         review_rail = None
         video_rail = None
+        stories_part1 = stories
+        stories_part2 = []
+        stories_part3 = []
 
     return render_template_string(
-        FEED_TEMPLATE, stories=stories, source_count=source_count,
+        MAIN_TEMPLATE, stories=stories, source_count=source_count,
+        stories_part1=stories_part1, stories_part2=stories_part2, stories_part3=stories_part3,
         active_tab="main", view=view, show_all=show_all, hidden_count=hidden_count,
         recent_url=build_url("/", view="recent", show_all=show_all),
         covered_url=build_url("/", view="covered", show_all=show_all),
@@ -1382,12 +1455,9 @@ def reviews():
     stories, source_count, _ = fetch_stories(tab="reviews", view=view)
     return render_template_string(
         FEED_TEMPLATE, stories=stories, source_count=source_count,
-        active_tab="reviews", view=view, show_all=True, hidden_count=0,
+        active_tab="reviews", view=view,
         recent_url=build_url("/reviews", view="recent"),
         covered_url=build_url("/reviews", view="covered"),
-        toggle_url=None,
-        show_filter_toggle=False,
-        show_rails=False, trending=None, review_rail=None, video_rail=None,
     )
 
 
@@ -1397,12 +1467,9 @@ def video():
     stories, source_count, _ = fetch_stories(tab="video", view=view)
     return render_template_string(
         FEED_TEMPLATE, stories=stories, source_count=source_count,
-        active_tab="video", view=view, show_all=True, hidden_count=0,
+        active_tab="video", view=view,
         recent_url=build_url("/video", view="recent"),
         covered_url=build_url("/video", view="covered"),
-        toggle_url=None,
-        show_filter_toggle=False,
-        show_rails=False, trending=None, review_rail=None, video_rail=None,
     )
 
 
