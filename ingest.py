@@ -46,6 +46,19 @@ OPENCRITIC_HOST = "opencritic-api.p.rapidapi.com"
 # - a complete WALKTHROUGH_PATTERN match, meaning virtually nothing
 # from the channel would ever surface, same outcome as FightinCowboy
 # earlier.
+#
+# GamesIndustry.biz added 12 Aug 2026, tiered "trusted" (consistent
+# with Game Developer - both are professional industry-trade press,
+# not consumer gaming news, regardless of shared ownership with
+# differently-tiered siblings). Deliberately added DESPITE being part
+# of the Gamer Network/IGN Entertainment/Ziff Davis group already
+# represented by IGN, Eurogamer, Rock Paper Shotgun, and VG247 - the
+# user's own reasoning: having it explicitly flagged as part of that
+# group via the ownership-transparency feature is *more* useful than
+# treating the overlap as a reason to exclude it. The point of that
+# feature is surfacing exactly this kind of connection, not avoiding
+# sources that would reveal one. Checked live first regardless: real
+# RSS feed at /feed, publishing several times a day, genuinely current.
 RSS_SOURCES = [
     {"name": "IGN", "tier": "trusted", "url": "https://www.ign.com/rss/articles/feed?tags=games"},
     {"name": "Polygon", "tier": "trusted", "url": "https://www.polygon.com/feed/"},
@@ -64,6 +77,7 @@ RSS_SOURCES = [
     {"name": "Game Developer", "tier": "trusted", "url": "https://www.gamedeveloper.com/feeds/rss.xml"},
     {"name": "The Indie Informer", "tier": "niche", "url": "https://theindieinformer.com/feed/"},
     {"name": "Indie Game Reviewer", "tier": "niche", "url": "https://indiegamereviewer.com/feed/"},
+    {"name": "GamesIndustry.biz", "tier": "trusted", "url": "https://www.gamesindustry.biz/feed"},
 ]
 
 REDDIT_SOURCES = [
