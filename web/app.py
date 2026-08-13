@@ -178,6 +178,33 @@ ICON_UP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-wid
 ICON_SEARCH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>'
 ICON_REFRESH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>'
 
+# FeedForge logo mark (added 13 Aug 2026) - the anvil/forge shape reduced
+# to two stacked solid blocks (a narrow "body" sitting on a wide "foot")
+# rather than a literal anvil illustration, topped by concentric signal
+# arcs and a single warm-orange flame accent. Designed through several
+# rounds with the user: started as a full 3D-rendered anvil under a
+# rainbow-colored signal, then reduced to flat black geometry specifically
+# because a plain silhouette reads more clearly as "signal" than a
+# multi-color arc does (which risks being misread as a literal rainbow),
+# and flat shapes hold up far better at small sizes than gradients/bevels
+# do. The two-block base was the user's own refinement - it gestures at a
+# real anvil's silhouette (narrow body, flared foot) through pure
+# geometry, without needing literal anvil detail. Reused directly (no
+# separate favicon asset) as both the header icon and the favicon via a
+# base64 data URI, consistent with this app's existing pattern of keeping
+# every icon as an inline SVG string in app.py rather than separate static
+# files.
+LOGO_ICON = """<svg viewBox="0 0 200 220" xmlns="http://www.w3.org/2000/svg">
+<path d="M 15 168 A 85 85 0 0 1 185 168" fill="none" stroke="#1a1a18" stroke-width="13" stroke-linecap="round"/>
+<path d="M 35 168 A 65 65 0 0 1 165 168" fill="none" stroke="#1a1a18" stroke-width="13" stroke-linecap="round"/>
+<path d="M 55 168 A 45 45 0 0 1 145 168" fill="none" stroke="#1a1a18" stroke-width="13" stroke-linecap="round"/>
+<rect x="65" y="168" width="70" height="25" fill="#1a1a18"/>
+<rect x="15" y="193" width="170" height="23" fill="#1a1a18"/>
+<path d="M 100 122 C 112 138, 120 152, 116 164 C 113 174, 104 180, 100 180 C 96 180, 87 174, 84 164 C 80 152, 88 138, 100 122 Z" fill="#D85A30"/>
+</svg>"""
+
+FAVICON_LINK = '<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgMjAwIDIyMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8cGF0aCBkPSJNIDE1IDE2OCBBIDg1IDg1IDAgMCAxIDE4NSAxNjgiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzFhMWExOCIgc3Ryb2tlLXdpZHRoPSIxMyIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+CiAgPHBhdGggZD0iTSAzNSAxNjggQSA2NSA2NSAwIDAgMSAxNjUgMTY4IiBmaWxsPSJub25lIiBzdHJva2U9IiMxYTFhMTgiIHN0cm9rZS13aWR0aD0iMTMiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPgogIDxwYXRoIGQ9Ik0gNTUgMTY4IEEgNDUgNDUgMCAwIDEgMTQ1IDE2OCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMWExYTE4IiBzdHJva2Utd2lkdGg9IjEzIiBzdHJva2UtbGluZWNhcD0icm91bmQiLz4KICA8cmVjdCB4PSI2NSIgeT0iMTY4IiB3aWR0aD0iNzAiIGhlaWdodD0iMjUiIGZpbGw9IiMxYTFhMTgiLz4KICA8cmVjdCB4PSIxNSIgeT0iMTkzIiB3aWR0aD0iMTcwIiBoZWlnaHQ9IjIzIiBmaWxsPSIjMWExYTE4Ii8+CiAgPHBhdGggZD0iTSAxMDAgMTIyCiAgICAgICAgICAgQyAxMTIgMTM4LCAxMjAgMTUyLCAxMTYgMTY0CiAgICAgICAgICAgQyAxMTMgMTc0LCAxMDQgMTgwLCAxMDAgMTgwCiAgICAgICAgICAgQyA5NiAxODAsIDg3IDE3NCwgODQgMTY0CiAgICAgICAgICAgQyA4MCAxNTIsIDg4IDEzOCwgMTAwIDEyMgogICAgICAgICAgIFoiCiAgICAgICAgZmlsbD0iI0Q4NUEzMCIvPgo8L3N2Zz4K">'
+
 
 CSS = """
 :root {
@@ -244,9 +271,25 @@ justify-content: space-between;
 align-items: flex-start;
 gap: 12px;
 }
+.header-brand {
+display: flex;
+align-items: center;
+gap: 10px;
+}
+.logo-icon {
+width: 32px;
+height: 35px;
+flex-shrink: 0;
+}
+.logo-icon svg {
+width: 100%;
+height: 100%;
+display: block;
+}
 header h1 {
-font-size: 20px;
-font-weight: 600;
+font-size: 21px;
+font-weight: 800;
+letter-spacing: -0.02em;
 margin: 0 0 4px;
 }
 header p {
@@ -993,9 +1036,12 @@ PULL_TO_REFRESH_HTML = """
 
 HEADER_HTML = """
 <header>
+<div class="header-brand">
+<div class="logo-icon">""" + LOGO_ICON + """</div>
 <div>
-<h1>FeedMeNews</h1>
+<h1>FeedForge</h1>
 <p>Gaming coverage across {{ source_count }} sources, grouped by story</p>
+</div>
 </div>
 <a href="/search" class="search-icon-btn" aria-label="Search">""" + ICON_SEARCH + """</a>
 </header>
@@ -1171,7 +1217,8 @@ MAIN_TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>FeedMeNews</title>
+<title>FeedForge</title>
+""" + FAVICON_LINK + """
 <style>""" + CSS + """</style>
 </head>
 <body>
@@ -1217,7 +1264,8 @@ FEED_TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>FeedMeNews</title>
+<title>FeedForge</title>
+""" + FAVICON_LINK + """
 <style>""" + CSS + """</style>
 </head>
 <body>
@@ -1252,7 +1300,8 @@ THEMES_TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Themes - FeedMeNews</title>
+<title>Themes - FeedForge</title>
+""" + FAVICON_LINK + """
 <style>""" + CSS + """</style>
 </head>
 <body>
@@ -1311,7 +1360,8 @@ SEARCH_TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Search - FeedMeNews</title>
+<title>Search - FeedForge</title>
+""" + FAVICON_LINK + """
 <style>""" + CSS + """</style>
 </head>
 <body>
@@ -1337,7 +1387,8 @@ STORY_TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{ story.title }} - FeedMeNews</title>
+<title>{{ story.title }} - FeedForge</title>
+""" + FAVICON_LINK + """
 <style>""" + CSS + """</style>
 </head>
 <body>
