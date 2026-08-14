@@ -203,6 +203,35 @@ WALKTHROUGH_PATTERN = re.compile(
 REVIEW_SCORE_INTERVAL_SECONDS = 3600
 MAX_OPENCRITIC_LOOKUPS_PER_DAY = 10
 
+# Community sentiment lexicon (added 14 Aug 2026) - the first piece of
+# the critic-vs-community divergence feature. Deliberately a small,
+# transparent word/phrase list rather than a real NLP model or an LLM
+# call - checked against real community-tier titles first (across
+# several actual stories with genuine Reddit discussion) before writing
+# this: most titles turned out to be flatly factual (sales-milestone
+# announcements, trailer titles, gameplay footage names) with no
+# emotional language at all, and only a minority carry real sentiment.
+# Given that, the lexicon is intentionally narrow and only checks for
+# clearly emotionally-loaded words/phrases - it will correctly find
+# nothing on most titles, which is the honest, correct outcome rather
+# than a gap to paper over. Deliberately excludes sales-figure language
+# ("sold X million," "copies") as a positive signal, even though it
+# showed up naturally in real data - a game "selling poorly" would
+# falsely trigger on the word "sold," so a substring heuristic isn't
+# reliable enough there; better to have no signal than a wrong one.
+COMMUNITY_POSITIVE_PHRASES = [
+    "amazing", "incredible", "loved it", "loving it", "great game",
+    "fantastic", "excellent", "masterpiece", "underrated", "impressive",
+    "goty", "phenomenal", "outstanding", "hidden gem", "surprisingly good",
+    "pleasantly surprised",
+]
+COMMUNITY_NEGATIVE_PHRASES = [
+    "disappointing", "disappointed", "disappoints", "broken", "terrible",
+    "awful", "worst game", "boring", "unplayable", "buggy mess", "overrated",
+    "downgrade", "cash grab", "flop", "slop", "dead on arrival",
+    "unfinished", "abandoned", "rip off", "ripoff", "waste of money",
+]
+
 
 def ensure_schema(conn):
     with conn.cursor() as cur:
@@ -259,6 +288,12 @@ def ensure_schema(conn):
         # Themes page's future interest-profile idea than read_at alone,
         # since opening something isn't the same as actually liking it.
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS liked_at TIMESTAMPTZ;")
+        # community_sentiment (added 14 Aug 2026) - 'positive', 'negative',
+        # or NULL (no clear signal, or not eligible - see
+        # compute_community_sentiment below). Powers the critic-vs-
+        # community divergence chip in the web app: only rendered there
+        # when this is set AND clearly disagrees with opencritic_tier.
+        cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS community_sentiment TEXT;")
     conn.commit()
 
 
@@ -510,6 +545,54 @@ def mark_video_stories(conn):
     conn.commit()
 
 
+def compute_community_sentiment(conn):
+    """Critic-vs-community divergence, part 1 (added 14 Aug 2026): scores
+    each review story's community-tier (Reddit) article titles against
+    the small phrase lexicon above, every cycle - free, no external API,
+    same cadence as mark_review_stories/mark_video_stories. Only
+    considers stories that are_review AND have at least one community-
+    tier article; anything else is left NULL (no claim made). A story's
+    community_sentiment is set to 'positive' or 'negative' only when one
+    side's phrase count clearly outweighs the other (strictly more
+    matches, and at least one match) - a tie or zero matches on both
+    sides leaves it NULL, which is the common case given how few titles
+    in practice carry real emotional language (see the lexicon's own
+    comment above). The actual critic-vs-community *disagreement* check
+    itself happens in the web app at render time (comparing this against
+    opencritic_tier), not here - this function only computes the
+    community side of that comparison.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT s.id, array_agg(a.title) AS titles
+            FROM stories s
+            JOIN articles a ON a.story_id = s.id
+            WHERE s.is_review = TRUE
+            AND EXISTS (SELECT 1 FROM articles a2 WHERE a2.story_id = s.id AND a2.source_tier = 'community')
+            GROUP BY s.id
+            """
+        )
+        rows = cur.fetchall()
+
+    for story_id, titles in rows:
+        combined = " ".join(titles).lower()
+        pos = sum(1 for phrase in COMMUNITY_POSITIVE_PHRASES if phrase in combined)
+        neg = sum(1 for phrase in COMMUNITY_NEGATIVE_PHRASES if phrase in combined)
+        if pos > neg and pos > 0:
+            sentiment = "positive"
+        elif neg > pos and neg > 0:
+            sentiment = "negative"
+        else:
+            sentiment = None
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE stories SET community_sentiment = %s WHERE id = %s",
+                (sentiment, story_id),
+            )
+    conn.commit()
+
+
 def extract_game_name(title):
     """Pull a clean game name out of a review-style headline.
 
@@ -678,6 +761,11 @@ def main():
             print("[ok] video detection")
         except Exception as e:
             print(f"[error] video detection: {e}")
+        try:
+            compute_community_sentiment(conn)
+            print("[ok] community sentiment")
+        except Exception as e:
+            print(f"[error] community sentiment: {e}")
 
         now = datetime.now(timezone.utc)
         due = (
