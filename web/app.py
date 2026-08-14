@@ -16,12 +16,12 @@ DB_URL = os.environ["DATABASE_URL"]
 # separate per-item timer or a manual "clear" action - the underlying
 # rows are never deleted, just filtered out of view once past this
 # window, so nothing is lost for the themes page below. Read state only
-# affects dimming (is_read below), not whether a story is in the window
-# at all - a read story ages out exactly the same way an unread one does.
-# Search (below) deliberately ignores this window entirely - see
-# fetch_search_results for why. Topic pages (also below) use the same
-# window as the main feed - unlike search, a topic page is meant to feel
-# like a live, current slice of the feed, not a historical archive.
+# affects sort order (is_read below), not whether something's in the
+# window at all - a read story ages out exactly the same way an unread
+# one does. Search (below) deliberately ignores this window entirely -
+# see fetch_search_results for why. Topic pages (also below) use the
+# same window as the main feed - unlike search, a topic page is meant to
+# feel like a live, current slice of the feed, not a historical archive.
 FEED_WINDOW_DAYS = 2
 
 # Milliseconds the Undo option stays available after a discard - see
@@ -126,15 +126,14 @@ SOURCE_OWNERSHIP = {
 # terms instead of a user-typed one. "sources" is the primary signal
 # (high precision - Push Square covering something really does mean
 # it's a PlayStation story); "keywords" adds recall for stories from
-# non-platform-specific outlets that are still clearly about that
-# platform. Indie and Industry have no natural keyword equivalent, so
-# they rely on source identity alone - that's fine, both have genuinely
-# dedicated sources now (Indie Informer/Indie Game Reviewer;
-# Game Developer/GamesIndustry.biz). Order here is the display order of
-# the tiles on Main. Xbox has no dedicated subreddit in REDDIT_SOURCES
-# (only r/PS5 and r/NintendoSwitch are platform-specific there) - a real,
-# known gap versus PlayStation/Switch's stronger source coverage, not an
-# oversight.
+# non-platform-specific outlets that are still clearly on-topic.
+# Indie and Industry have no natural keyword equivalent, so they rely
+# on source identity alone - that's fine, both have genuinely dedicated
+# sources now (Indie Informer/Indie Game Reviewer; Game Developer/
+# GamesIndustry.biz). Order here is the display order of the tiles on
+# Main. Xbox has no dedicated subreddit in REDDIT_SOURCES (only r/PS5
+# and r/NintendoSwitch are platform-specific there) - a real, known gap
+# versus PlayStation/Switch's stronger source coverage, not an oversight.
 TOPICS = {
     "playstation": {
         "label": "PlayStation",
@@ -290,7 +289,14 @@ header h1 {
 font-size: 21px;
 font-weight: 800;
 letter-spacing: -0.02em;
-margin: 0 0 4px;
+margin: 0 0 2px;
+}
+.tagline {
+font-size: 12px;
+font-weight: 700;
+font-style: italic;
+color: var(--comm);
+margin: 0 0 3px;
 }
 header p {
 font-size: 13px;
@@ -531,9 +537,6 @@ padding: 16px;
 margin-bottom: 14px;
 transition: opacity 0.15s ease, transform 0.15s ease, max-height 0.22s ease, margin-bottom 0.22s ease, padding 0.22s ease;
 overflow: hidden;
-}
-.card.read {
-opacity: 0.5;
 }
 .card-image {
 display: block;
@@ -1034,12 +1037,17 @@ PULL_TO_REFRESH_HTML = """
 </script>
 """
 
+# Tagline added 14 Aug 2026, sitting between the FeedForge wordmark and
+# the plain factual source-count line - a short, deliberate statement of
+# what this whole project is actually for, styled in the same orange
+# accent as the logo's flame for a small tie-back to the mark itself.
 HEADER_HTML = """
 <header>
 <div class="header-brand">
 <div class="logo-icon">""" + LOGO_ICON + """</div>
 <div>
 <h1>FeedForge</h1>
+<p class="tagline">Curation Done Correctly</p>
 <p>Gaming coverage across {{ source_count }} sources, grouped by story</p>
 </div>
 </div>
@@ -1157,6 +1165,15 @@ REVIEW_RAIL_HTML = """
 # split-into-parts layout below) or once with a single flat list
 # (Reviews/Video/Search/Topic) without duplicating the actual HTML.
 #
+# Read-state dimming removed 14 Aug 2026 at the user's request - keeping
+# only the sort-to-bottom behavior (still applied in fetch_stories/
+# fetch_search_results' ORDER BY), not the opacity fade. The two were
+# always separate mechanisms (see the project log), so removing one
+# doesn't touch the other - a read story still moves down the list, it
+# just no longer visually dims while doing so. The "read" class hook
+# itself was removed along with its CSS, matching how the now-unused
+# .pending-remove dimming class was cleaned up the same way earlier.
+#
 # blindspot-chip added 12 Aug 2026: flags a story with real multi-source
 # coverage (2+ sources) but zero "trusted"-tier sources - i.e. niche
 # and/or community outlets are covering something that hasn't (yet)
@@ -1171,7 +1188,7 @@ REVIEW_RAIL_HTML = """
 # above (plain text, not another colored badge) since most stories won't
 # trigger it and it shouldn't compete visually with score/blindspot.
 CARD_HTML = """
-<div class="card {{ 'read' if story.is_read else '' }}">
+<div class="card">
 <button class="discard-btn" data-action="/story/{{ story.id }}/discard" data-id="{{ story.id }}" aria-label="Discard">""" + ICON_X + """</button>
 <button class="like-btn {{ 'liked' if story.is_liked else '' }}" data-action="/story/{{ story.id }}/like" aria-label="Like">""" + ICON_HEART + """</button>
 <a class="card-link with-buttons" href="/story/{{ story.id }}">
@@ -1706,9 +1723,9 @@ def fetch_search_results(query):
     this, where did it go" - filtering search results by recency or
     coverage count would work against exactly what it's for. Dismissed
     stories are still excluded (an explicit "not interested" shouldn't be
-    resurrected by search), but read stories are included (dimmed, same as
-    everywhere else) since a read story is exactly the kind of thing
-    you'd search for.
+    resurrected by search), but read stories are included (sorted after
+    unread ones, same as everywhere else) since a read story is exactly
+    the kind of thing you'd search for.
 
     Uses Postgres's built-in full-text search (to_tsvector/plainto_tsquery)
     rather than a plain ILIKE substring match - real relevance ranking and
@@ -1749,7 +1766,7 @@ def fetch_search_results(query):
             WHERE s.dismissed_at IS NULL
             AND to_tsvector('english', s.title) @@ plainto_tsquery('english', %s)
             GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier, s.read_at, s.liked_at
-            ORDER BY rank DESC, latest DESC
+            ORDER BY (s.read_at IS NOT NULL), rank DESC, latest DESC
             LIMIT 40
             """,
             (query, query),
