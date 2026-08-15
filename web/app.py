@@ -56,6 +56,15 @@ MIN_SOURCES_DEFAULT = 2
 # cram full browsability into a scroll strip.
 RAIL_LIMIT = 8
 
+# Minimum combined votes (like_count + dislike_count) before showing a
+# percentage-based sentiment summary (added 14 Aug 2026). Below this,
+# a "73% liked this" style readout from a tiny handful of votes would be
+# real numbers dressed up as a statistic - misleadingly precise for a
+# sample that small. Below the threshold we just say there aren't
+# enough votes yet, rather than show a percentage that happens to be
+# mathematically correct but not actually meaningful.
+MIN_VOTES_FOR_SENTIMENT = 5
+
 # Small inline stopword list for the themes word-frequency stat - kept
 # separate from ingest.py's clustering stopwords deliberately, since the
 # two services don't share code or dependencies (no sklearn in the web
@@ -126,9 +135,9 @@ SOURCE_OWNERSHIP = {
 # terms instead of a user-typed one. "sources" is the primary signal
 # (high precision - Push Square covering something really does mean
 # it's a PlayStation story); "keywords" adds recall for stories from
-# non-platform-specific outlets that are still clearly on-topic.
-# Indie and Industry have no natural keyword equivalent, so they rely
-# on source identity alone - that's fine, both have genuinely dedicated
+# non-platform-specific outlets that are still clearly on-topic. Indie
+# and Industry have no natural keyword equivalent, so they rely on
+# source identity alone - that's fine, both have genuinely dedicated
 # sources now (Indie Informer/Indie Game Reviewer; Game Developer/
 # GamesIndustry.biz). Order here is the display order of the tiles on
 # Main. Xbox has no dedicated subreddit in REDDIT_SOURCES (only r/PS5
@@ -172,10 +181,18 @@ ICON_REVIEWS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strok
 ICON_VIDEO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><polygon points="10 8 16 12 10 16" fill="currentColor" stroke="none"></polygon></svg>'
 ICON_THEMES = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2l1.8 6.2L20 10l-6.2 1.8L12 18l-1.8-6.2L4 10l6.2-1.8z"></path></svg>'
 ICON_X = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"></line><line x1="18" y1="6" x2="6" y2="18"></line></svg>'
-ICON_HEART = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.8 1-1a5.5 5.5 0 0 0 0-7.8z"></path></svg>'
 ICON_UP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="6 11 12 5 18 11"></polyline></svg>'
 ICON_SEARCH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>'
 ICON_REFRESH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>'
+
+# Thumbs up/down (added 14 Aug 2026), replacing the old single heart
+# "like" button entirely per the user's explicit call - one unified
+# up/down action rather than a personal-interest heart plus a separate
+# public-sentiment control. Down is the same path as up, just rotated
+# 180 degrees around the icon's own center, rather than a second
+# hand-authored path - guarantees the two stay visually consistent.
+ICON_THUMBS_UP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path></svg>'
+ICON_THUMBS_DOWN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3" transform="rotate(180 12 12)"></path></svg>'
 
 # FeedForge logo mark (added 13 Aug 2026) - the anvil/forge shape reduced
 # to two stacked solid blocks (a narrow "body" sitting on a wide "foot")
@@ -552,9 +569,10 @@ display: block;
 .card-link.with-buttons {
 padding-top: 54px;
 }
-.discard-btn, .like-btn {
+.discard-btn {
 position: absolute;
 top: 8px;
+left: 8px;
 width: 44px;
 height: 44px;
 border-radius: 50%;
@@ -572,15 +590,61 @@ padding: 0;
 box-shadow: 0 1px 4px rgba(0,0,0,0.25);
 transition: transform 0.15s ease;
 }
-.discard-btn { left: 8px; }
-.like-btn { right: 8px; }
-.discard-btn:active, .like-btn:active {
-transform: scale(0.88);
-}
+.discard-btn:active { transform: scale(0.88); }
 .discard-btn svg { width: 17px; height: 17px; }
-.like-btn svg { width: 20px; height: 20px; }
-.like-btn.liked { color: var(--niche); }
-.like-btn.liked svg { fill: currentColor; }
+/* Vote controls: default styling is tuned for sitting on top of a card
+   image (semi-transparent dark + blur, since the background varies per
+   story) - added 14 Aug 2026, replacing the old single like-btn heart
+   entirely. The .inline modifier (used on the story detail page, which
+   never had a like control before this) restyles the same buttons for
+   sitting on a plain card/page background instead. */
+.vote-controls {
+position: absolute;
+top: 8px;
+right: 8px;
+display: flex;
+flex-direction: column;
+gap: 6px;
+z-index: 2;
+}
+.vote-controls.inline {
+position: static;
+flex-direction: row;
+gap: 10px;
+}
+.vote-btn {
+width: 36px;
+height: 36px;
+border-radius: 50%;
+border: none;
+background: rgba(0,0,0,0.4);
+backdrop-filter: blur(6px);
+-webkit-backdrop-filter: blur(6px);
+color: #fff;
+display: flex;
+align-items: center;
+justify-content: center;
+cursor: pointer;
+padding: 0;
+box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+transition: transform 0.15s ease;
+}
+.vote-btn:active { transform: scale(0.88); }
+.vote-btn svg { width: 16px; height: 16px; }
+.vote-btn.voted-up { background: rgba(0,0,0,0.55); color: var(--strong-fg); }
+.vote-btn.voted-down { background: rgba(0,0,0,0.55); color: var(--weak-fg); }
+.vote-btn:disabled { cursor: default; }
+.vote-controls.inline .vote-btn {
+width: 40px;
+height: 40px;
+background: var(--border);
+color: var(--text-secondary);
+backdrop-filter: none;
+-webkit-backdrop-filter: none;
+box-shadow: none;
+}
+.vote-controls.inline .vote-btn.voted-up { background: var(--strong-bg); color: var(--strong-fg); }
+.vote-controls.inline .vote-btn.voted-down { background: var(--weak-bg); color: var(--weak-fg); }
 .card h2 {
 font-size: 16px;
 font-weight: 600;
@@ -658,7 +722,7 @@ line-height: 1.6;
 color: var(--text);
 margin: 4px 0 22px;
 }
-.score-block {
+.score-block, .sentiment-block {
 display: flex;
 align-items: center;
 gap: 14px;
@@ -688,6 +752,11 @@ margin: 0 0 4px;
 font-size: 13px;
 text-decoration: underline;
 color: var(--text-secondary);
+}
+.sentiment-summary {
+font-size: 14px;
+color: var(--text-secondary);
+margin: 0;
 }
 .source-row {
 display: block;
@@ -907,43 +976,107 @@ CARD_INTERACTIONS_JS = """
 
   document.addEventListener("click", function (e) {
     var discardBtn = e.target.closest(".discard-btn");
-    if (discardBtn) {
-      e.preventDefault();
-      e.stopPropagation();
-      var url = discardBtn.getAttribute("data-action");
-      var card = discardBtn.closest(".card");
-      var storyId = discardBtn.getAttribute("data-id");
-      fetch(url, { method: "POST" }).then(function (r) {
-        if (!r.ok) return;
-        collapseCard(card);
-        var removeTimeout = setTimeout(function () {
-          card.remove();
-        }, """ + str(UNDO_WINDOW_MS) + """);
-        showToast("Story discarded", function () {
-          clearTimeout(removeTimeout);
-          restoreCard(card);
-          fetch("/story/" + storyId + "/undiscard", { method: "POST" });
-        });
+    if (!discardBtn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    var url = discardBtn.getAttribute("data-action");
+    var card = discardBtn.closest(".card");
+    var storyId = discardBtn.getAttribute("data-id");
+    fetch(url, { method: "POST" }).then(function (r) {
+      if (!r.ok) return;
+      collapseCard(card);
+      var removeTimeout = setTimeout(function () {
+        card.remove();
+      }, """ + str(UNDO_WINDOW_MS) + """);
+      showToast("Story discarded", function () {
+        clearTimeout(removeTimeout);
+        restoreCard(card);
+        fetch("/story/" + storyId + "/undiscard", { method: "POST" });
       });
-      return;
-    }
+    });
+  });
+})();
+</script>
+"""
 
-    var likeBtn = e.target.closest(".like-btn");
-    if (likeBtn) {
-      e.preventDefault();
-      e.stopPropagation();
-      var likeUrl = likeBtn.getAttribute("data-action");
-      fetch(likeUrl, { method: "POST" })
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
-          if (data.liked) {
-            likeBtn.classList.add("liked");
-          } else {
-            likeBtn.classList.remove("liked");
-          }
-        });
-      return;
+# Vote controls JS (added 14 Aug 2026): shared by every template that can
+# render a .vote-controls block - feed cards (Main/Reviews/Video/Search/
+# Topic) and the story detail page alike. No accounts exist yet, so vote
+# state is tracked client-side in localStorage rather than server-side
+# per visitor - a determined person could clear it and vote again, same
+# category of limitation as the shared read/like state elsewhere until
+# real accounts exist. Once a story has been voted on in this browser,
+# both buttons for that story are disabled and the chosen direction is
+# highlighted - no changing your mind, no un-voting, deliberately the
+# simplest possible v1 rather than also handling switched votes
+# server-side.
+VOTE_INTERACTIONS_JS = """
+<script>
+(function () {
+  function getVoted() {
+    try {
+      return JSON.parse(localStorage.getItem("votedStories") || "{}");
+    } catch (e) {
+      return {};
     }
+  }
+
+  function setVoted(storyId, direction) {
+    var voted = getVoted();
+    voted[storyId] = direction;
+    try {
+      localStorage.setItem("votedStories", JSON.stringify(voted));
+    } catch (e) {}
+  }
+
+  function disableGroup(group, direction) {
+    var buttons = group.querySelectorAll(".vote-btn");
+    buttons.forEach(function (b) {
+      b.disabled = true;
+      if (b.getAttribute("data-direction") === direction) {
+        b.classList.add(direction === "up" ? "voted-up" : "voted-down");
+      }
+    });
+  }
+
+  function applyVotedState() {
+    var voted = getVoted();
+    document.querySelectorAll(".vote-controls[data-story-id]").forEach(function (group) {
+      var storyId = group.getAttribute("data-story-id");
+      var direction = voted[storyId];
+      if (direction) disableGroup(group, direction);
+    });
+  }
+
+  applyVotedState();
+
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest(".vote-btn");
+    if (!btn || btn.disabled) return;
+    e.preventDefault();
+    e.stopPropagation();
+    var group = btn.closest(".vote-controls");
+    var storyId = group.getAttribute("data-story-id");
+    var direction = btn.getAttribute("data-direction");
+    if (getVoted()[storyId]) return;
+
+    fetch("/story/" + storyId + "/vote/" + direction, { method: "POST" })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok) return;
+        setVoted(storyId, direction);
+        disableGroup(group, direction);
+        var summaryEl = group.parentElement.querySelector(".sentiment-summary");
+        if (summaryEl) {
+          var total = data.like_count + data.dislike_count;
+          if (total >= """ + str(MIN_VOTES_FOR_SENTIMENT) + """) {
+            var pct = Math.round((data.like_count / total) * 100);
+            summaryEl.textContent = pct + "% liked this (" + total + " vote" + (total !== 1 ? "s" : "") + ")";
+          } else {
+            summaryEl.textContent = "Not enough votes yet";
+          }
+        }
+      });
   });
 })();
 </script>
@@ -1160,19 +1293,28 @@ REVIEW_RAIL_HTML = """
 {% endif %}
 """
 
+# Vote controls block (added 14 Aug 2026), reused on both feed cards and
+# the story detail page via {% include %}-style string concatenation -
+# on cards it's absolutely positioned over the image (top-right, where
+# the old like heart used to sit); on the detail page it's rendered with
+# the "inline" class instead (see .vote-controls.inline in CSS), sitting
+# statically in its own row/block rather than overlaying anything.
+VOTE_CONTROLS_HTML = """
+<div class="vote-controls {{ vote_extra_class|default('') }}" data-story-id="{{ vote_story_id }}">
+<button class="vote-btn" data-direction="up" aria-label="Vote up">""" + ICON_THUMBS_UP + """</button>
+<button class="vote-btn" data-direction="down" aria-label="Vote down">""" + ICON_THUMBS_DOWN + """</button>
+</div>
+"""
+
 # Single-story card markup, kept as its own reusable block so it can be
 # looped over multiple times with different list variables (Main's
 # split-into-parts layout below) or once with a single flat list
 # (Reviews/Video/Search/Topic) without duplicating the actual HTML.
 #
-# Read-state dimming removed 14 Aug 2026 at the user's request - keeping
-# only the sort-to-bottom behavior (still applied in fetch_stories/
-# fetch_search_results' ORDER BY), not the opacity fade. The two were
-# always separate mechanisms (see the project log), so removing one
-# doesn't touch the other - a read story still moves down the list, it
-# just no longer visually dims while doing so. The "read" class hook
-# itself was removed along with its CSS, matching how the now-unused
-# .pending-remove dimming class was cleaned up the same way earlier.
+# Vote controls replace the old single heart "like" button entirely as
+# of 14 Aug 2026, per the user's explicit call - one unified up/down
+# action rather than a personal-interest heart plus a separate public-
+# sentiment control living side by side.
 #
 # blindspot-chip added 12 Aug 2026: flags a story with real multi-source
 # coverage (2+ sources) but zero "trusted"-tier sources - i.e. niche
@@ -1190,7 +1332,10 @@ REVIEW_RAIL_HTML = """
 CARD_HTML = """
 <div class="card">
 <button class="discard-btn" data-action="/story/{{ story.id }}/discard" data-id="{{ story.id }}" aria-label="Discard">""" + ICON_X + """</button>
-<button class="like-btn {{ 'liked' if story.is_liked else '' }}" data-action="/story/{{ story.id }}/like" aria-label="Like">""" + ICON_HEART + """</button>
+<div class="vote-controls" data-story-id="{{ story.id }}">
+<button class="vote-btn" data-direction="up" aria-label="Vote up">""" + ICON_THUMBS_UP + """</button>
+<button class="vote-btn" data-direction="down" aria-label="Vote down">""" + ICON_THUMBS_DOWN + """</button>
+</div>
 <a class="card-link with-buttons" href="/story/{{ story.id }}">
 {% if story.image_url %}
 <img class="card-image" src="{{ story.image_url }}" loading="lazy" alt="">
@@ -1272,7 +1417,7 @@ Showing stories with 2+ sources{% if hidden_count %} &middot; {{ hidden_count }}
 <p class="meta">Nothing here yet.</p>
 {% endif %}
 </main>
-""" + CARD_INTERACTIONS_JS + BACK_TO_TOP_HTML + PULL_TO_REFRESH_HTML + """
+""" + CARD_INTERACTIONS_JS + VOTE_INTERACTIONS_JS + BACK_TO_TOP_HTML + PULL_TO_REFRESH_HTML + """
 </body>
 </html>"""
 
@@ -1308,7 +1453,7 @@ FEED_TEMPLATE = """<!doctype html>
 <main>
 """ + STORY_CARD_LOOP_HTML + """
 </main>
-""" + CARD_INTERACTIONS_JS + BACK_TO_TOP_HTML + PULL_TO_REFRESH_HTML + """
+""" + CARD_INTERACTIONS_JS + VOTE_INTERACTIONS_JS + BACK_TO_TOP_HTML + PULL_TO_REFRESH_HTML + """
 </body>
 </html>"""
 
@@ -1395,7 +1540,7 @@ SEARCH_TEMPLATE = """<!doctype html>
 {% endif %}
 """ + STORY_CARD_LOOP_HTML + """
 </main>
-""" + CARD_INTERACTIONS_JS + BACK_TO_TOP_HTML + PULL_TO_REFRESH_HTML + """
+""" + CARD_INTERACTIONS_JS + VOTE_INTERACTIONS_JS + BACK_TO_TOP_HTML + PULL_TO_REFRESH_HTML + """
 </body>
 </html>"""
 
@@ -1436,6 +1581,13 @@ STORY_TEMPLATE = """<!doctype html>
 </div>
 </div>
 {% endif %}
+<div class="sentiment-block">
+<div class="vote-controls inline" data-story-id="{{ story.id }}">
+<button class="vote-btn" data-direction="up" aria-label="Vote up">""" + ICON_THUMBS_UP + """</button>
+<button class="vote-btn" data-direction="down" aria-label="Vote down">""" + ICON_THUMBS_DOWN + """</button>
+</div>
+<p class="sentiment-summary">{{ sentiment_summary or "Not enough votes yet" }}</p>
+</div>
 {% if synopsis %}
 <p class="synopsis">{{ synopsis }}</p>
 {% endif %}
@@ -1449,7 +1601,7 @@ STORY_TEMPLATE = """<!doctype html>
 </a>
 {% endfor %}
 </main>
-""" + BACK_TO_TOP_HTML + PULL_TO_REFRESH_HTML + """
+""" + VOTE_INTERACTIONS_JS + BACK_TO_TOP_HTML + PULL_TO_REFRESH_HTML + """
 </body>
 </html>"""
 
@@ -1499,6 +1651,20 @@ def compute_ownership_note(sources):
     return None
 
 
+def compute_sentiment_summary(like_count, dislike_count):
+    """Reader-driven sentiment (added 14 Aug 2026): real explicit up/down
+    votes rather than anything inferred from text. Returns None below
+    MIN_VOTES_FOR_SENTIMENT rather than a percentage that would be
+    mathematically correct but misleadingly precise for a tiny sample -
+    callers render "Not enough votes yet" in that case instead.
+    """
+    total = (like_count or 0) + (dislike_count or 0)
+    if total < MIN_VOTES_FOR_SENTIMENT:
+        return None
+    pct = round((like_count or 0) / total * 100)
+    return f"{pct}% liked this ({total} vote{'s' if total != 1 else ''})"
+
+
 def strip_html(text):
     text = re.sub(r"<[^>]+>", " ", text or "")
     text = re.sub(r"\s+", " ", text).strip()
@@ -1532,7 +1698,7 @@ def all_topic_tiles():
 def fetch_rail(kind):
     """A short, glanceable preview strip - inspired by Ground News's
     homepage rails. Deliberately not a replacement for the full
-    Reviews/Video tabs: short (RAIL_LIMIT items), no discard/like
+    Reviews/Video tabs: short (RAIL_LIMIT items), no discard/vote
     interactions, just a teaser with a "See all" link through to the
     real thing. "trending" spans all content types, sorted purely by
     how many independent sources are on a story - the same signal
@@ -1631,7 +1797,8 @@ def fetch_stories(tab, view, show_all=False):
             s.opencritic_score,
             s.opencritic_tier,
             s.read_at,
-            s.liked_at,
+            s.like_count,
+            s.dislike_count,
             count(*) AS n,
             count(*) FILTER (WHERE a.source_tier = 'trusted') AS trusted_n,
             count(*) FILTER (WHERE a.source_tier = 'niche') AS niche_n,
@@ -1641,7 +1808,7 @@ def fetch_stories(tab, view, show_all=False):
         JOIN articles a ON a.story_id = s.id
         WHERE 1=1 {tab_where}
         AND s.dismissed_at IS NULL
-        GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier, s.read_at, s.liked_at
+        GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier, s.read_at, s.like_count, s.dislike_count
         HAVING max(COALESCE(a.published_at, a.fetched_at)) > now() - interval '{FEED_WINDOW_DAYS} days'
         {coverage_having}
         ORDER BY (s.read_at IS NOT NULL), {order_by}
@@ -1685,7 +1852,6 @@ def fetch_stories(tab, view, show_all=False):
             "opencritic_score": row["opencritic_score"],
             "opencritic_tier": row["opencritic_tier"],
             "is_read": row["read_at"] is not None,
-            "is_liked": row["liked_at"] is not None,
             "is_blindspot": row["trusted_n"] == 0 and row["n"] >= 2,
             "ownership_note": compute_ownership_note(sources),
         })
@@ -1754,7 +1920,8 @@ def fetch_search_results(query):
                 s.opencritic_score,
                 s.opencritic_tier,
                 s.read_at,
-                s.liked_at,
+                s.like_count,
+                s.dislike_count,
                 count(*) AS n,
                 count(*) FILTER (WHERE a.source_tier = 'trusted') AS trusted_n,
                 count(*) FILTER (WHERE a.source_tier = 'niche') AS niche_n,
@@ -1765,7 +1932,7 @@ def fetch_search_results(query):
             JOIN articles a ON a.story_id = s.id
             WHERE s.dismissed_at IS NULL
             AND to_tsvector('english', s.title) @@ plainto_tsquery('english', %s)
-            GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier, s.read_at, s.liked_at
+            GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier, s.read_at, s.like_count, s.dislike_count
             ORDER BY (s.read_at IS NOT NULL), rank DESC, latest DESC
             LIMIT 40
             """,
@@ -1807,7 +1974,6 @@ def fetch_search_results(query):
                 "opencritic_score": row["opencritic_score"],
                 "opencritic_tier": row["opencritic_tier"],
                 "is_read": row["read_at"] is not None,
-                "is_liked": row["liked_at"] is not None,
                 "is_blindspot": row["trusted_n"] == 0 and row["n"] >= 2,
                 "ownership_note": compute_ownership_note(sources),
             })
@@ -1854,7 +2020,8 @@ def fetch_topic_stories(topic_key, view="recent"):
     cur.execute(
         f"""
         SELECT
-            s.id, s.title, s.opencritic_score, s.opencritic_tier, s.read_at, s.liked_at,
+            s.id, s.title, s.opencritic_score, s.opencritic_tier, s.read_at,
+            s.like_count, s.dislike_count,
             count(*) AS n,
             count(*) FILTER (WHERE a.source_tier = 'trusted') AS trusted_n,
             count(*) FILTER (WHERE a.source_tier = 'niche') AS niche_n,
@@ -1864,7 +2031,7 @@ def fetch_topic_stories(topic_key, view="recent"):
         JOIN articles a ON a.story_id = s.id
         WHERE s.dismissed_at IS NULL
         {topic_where}
-        GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier, s.read_at, s.liked_at
+        GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier, s.read_at, s.like_count, s.dislike_count
         HAVING max(COALESCE(a.published_at, a.fetched_at)) > now() - interval '{FEED_WINDOW_DAYS} days'
         ORDER BY (s.read_at IS NOT NULL), {order_by}
         LIMIT 30
@@ -1908,7 +2075,6 @@ def fetch_topic_stories(topic_key, view="recent"):
             "opencritic_score": row["opencritic_score"],
             "opencritic_tier": row["opencritic_tier"],
             "is_read": row["read_at"] is not None,
-            "is_liked": row["liked_at"] is not None,
             "is_blindspot": row["trusted_n"] == 0 and row["n"] >= 2,
             "ownership_note": compute_ownership_note(sources),
         })
@@ -2126,29 +2292,30 @@ def undiscard_story(story_id):
     return jsonify(ok=True)
 
 
-@app.route("/story/<int:story_id>/like", methods=["POST"])
-def like_story(story_id):
-    # A toggle, not a one-way action - tapping again un-likes. Kept as its
-    # own explicit signal (liked_at) separate from read_at, since "opened
-    # this" and "actually liked this" are different strengths of signal
-    # for the Themes page's future interest-profile idea.
+@app.route("/story/<int:story_id>/vote/<direction>", methods=["POST"])
+def vote_story(story_id, direction):
+    # Reader-driven sentiment (added 14 Aug 2026), replacing the old
+    # single-toggle /like route entirely. Simple incrementing counters,
+    # no per-voter table - see the schema comment in ingest.py for why
+    # (no accounts yet to key a real per-voter record on). direction is
+    # validated against a fixed set before touching the column name, so
+    # the f-string below is never fed anything from user input directly.
+    if direction not in ("up", "down"):
+        return jsonify(ok=False, error="invalid direction"), 400
+    column = "like_count" if direction == "up" else "dislike_count"
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT liked_at FROM stories WHERE id = %s", (story_id,))
-    row = cur.fetchone()
-    if row is None:
-        cur.close()
-        conn.close()
-        return jsonify(ok=False), 404
-    liked = row["liked_at"] is None
     cur.execute(
-        "UPDATE stories SET liked_at = %s WHERE id = %s",
-        (datetime.datetime.now(datetime.timezone.utc) if liked else None, story_id),
+        f"UPDATE stories SET {column} = {column} + 1 WHERE id = %s RETURNING like_count, dislike_count",
+        (story_id,),
     )
+    row = cur.fetchone()
     conn.commit()
     cur.close()
     conn.close()
-    return jsonify(ok=True, liked=liked)
+    if row is None:
+        return jsonify(ok=False), 404
+    return jsonify(ok=True, like_count=row["like_count"], dislike_count=row["dislike_count"])
 
 
 @app.route("/story/<int:story_id>")
@@ -2157,7 +2324,8 @@ def story_detail(story_id):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
         """
-        SELECT id, title, is_review, is_video, opencritic_score, opencritic_tier, opencritic_url
+        SELECT id, title, is_review, is_video, opencritic_score, opencritic_tier, opencritic_url,
+               like_count, dislike_count
         FROM stories WHERE id = %s
         """,
         (story_id,),
@@ -2193,6 +2361,7 @@ def story_detail(story_id):
     community_n = sum(1 for a in articles if a["source_tier"] == "community")
     is_blindspot = trusted_n == 0 and len(articles) >= 2
     ownership_note = compute_ownership_note([(a["source"], a["source_tier"]) for a in articles])
+    sentiment_summary = compute_sentiment_summary(story["like_count"], story["dislike_count"])
 
     tier_rank = {"trusted": 0, "niche": 1, "community": 2}
     ranked = sorted(articles, key=lambda a: (tier_rank.get(a["source_tier"], 3), -len(a["summary"] or "")))
@@ -2241,6 +2410,7 @@ def story_detail(story_id):
         hero_image=hero_image,
         is_blindspot=is_blindspot,
         ownership_note=ownership_note,
+        sentiment_summary=sentiment_summary,
         n=len(articles),
         trusted_n=trusted_n,
         niche_n=niche_n,
