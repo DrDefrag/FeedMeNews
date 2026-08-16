@@ -1287,7 +1287,7 @@ CALENDAR_TEMPLATE = """<!doctype html>
 {% for group in groups %}
 <div class="calendar-group">
 <p class="section-label">{{ group.label }}</p>
-{% for item in group.items %}
+{% for item in group.entries %}
 <div class="calendar-entry">
 {% if item.cover_url %}
 <img class="calendar-cover" src="{{ item.cover_url }}" loading="lazy" alt="">
@@ -1883,10 +1883,10 @@ def fetch_calendar_entries():
         key = row["release_date"]
         if current_group is None or key != current_key:
             label = key.strftime("%A, %B %-d")
-            current_group = {"label": label, "items": []}
+            current_group = {"label": label, "entries": []}
             grouped.append(current_group)
             current_key = key
-        current_group["items"].append(row)
+        current_group["entries"].append(row)
     return grouped
 
 
