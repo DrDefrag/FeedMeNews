@@ -15,52 +15,6 @@ OPENCRITIC_HOST = "opencritic-api.p.rapidapi.com"
 IGDB_CLIENT_ID = os.environ.get("IGDB_CLIENT_ID")
 IGDB_CLIENT_SECRET = os.environ.get("IGDB_CLIENT_SECRET")
 
-# Game Developer, The Indie Informer, and Indie Game Reviewer added 12
-# Aug 2026, following a discussion about diversifying sources rather
-# than just adding volume. Checked live first, same as always:
-#
-# Game Developer (gamedeveloper.com, formerly Gamasutra) - tiered
-# "trusted": a real professional trade publication (industry/craft
-# news - layoffs, acquisitions, design deep-dives - a genuinely
-# different angle from our existing consumer-press sources), owned by
-# Informa Tech Target (confirmed via Wikipedia), independent of the
-# Ziff Davis/Future plc/Valnet/Hookshot Media concentration already
-# found among our other sources. Publishes several times daily.
-#
-# The Indie Informer and Indie Game Reviewer - both tiered "niche":
-# small, genuinely independent teams (Indie Informer is Patreon-funded;
-# Indie Game Reviewer's own About page describes it as "an
-# independently operated website," running since 2007), covering indie
-# games exclusively - the specific gap asked for. Indie Game Reviewer
-# publishes roughly weekly rather than daily - lower cadence than our
-# other sources, worth knowing going in, but still genuine, verified
-# activity (confirmed via actual feed pubDates, not a stale-looking
-# featured/pinned carousel on the homepage, which turned out to be
-# misleading on its own).
-#
-# r/IndieDev and indie YouTube curator Jupiter Hadley were both
-# checked and deliberately NOT added: r/IndieDev's real content is
-# almost entirely self-promotional WIP showcases (GIFs/screenshots of
-# one dev's own project) rather than news that could ever cluster with
-# anything else - adding it would just recreate the single-source
-# noise problem MIN_SOURCES_DEFAULT already exists to manage. Jupiter
-# Hadley's current uploads are 100% numbered "Part N" jam playthroughs
-# - a complete WALKTHROUGH_PATTERN match, meaning virtually nothing
-# from the channel would ever surface, same outcome as FightinCowboy
-# earlier.
-#
-# GamesIndustry.biz added 12 Aug 2026, tiered "trusted" (consistent
-# with Game Developer - both are professional industry-trade press,
-# not consumer gaming news, regardless of shared ownership with
-# differently-tiered siblings). Deliberately added DESPITE being part
-# of the Gamer Network/IGN Entertainment/Ziff Davis group already
-# represented by IGN, Eurogamer, Rock Paper Shotgun, and VG247 - the
-# user's own reasoning: having it explicitly flagged as part of that
-# group via the ownership-transparency feature is *more* useful than
-# treating the overlap as a reason to exclude it. The point of that
-# feature is surfacing exactly this kind of connection, not avoiding
-# sources that would reveal one. Checked live first regardless: real
-# RSS feed at /feed, publishing several times a day, genuinely current.
 RSS_SOURCES = [
     {"name": "IGN", "tier": "trusted", "url": "https://www.ign.com/rss/articles/feed?tags=games"},
     {"name": "Polygon", "tier": "trusted", "url": "https://www.polygon.com/feed/"},
@@ -89,42 +43,6 @@ REDDIT_SOURCES = [
     {"name": "r/PS5", "tier": "community", "url": "https://www.reddit.com/r/PS5/.rss"},
 ]
 
-# YouTube RSS via channel_id - no API key, no OAuth, no quota. Channel IDs
-# found by loading each channel page and reading the link rel=alternate
-# type=application/rss+xml tag YouTube includes by default - the handle
-# (@name) is not the same as the channel_id needed here. Verified live on
-# 10 Aug 2026: all 7 parse cleanly with feedparser (unlike Reddit's Atom
-# variant, which needed manual ElementTree parsing - YouTube's is standard).
-# Some entries are YouTube Shorts, not full videos - left in for now rather
-# than adding filtering complexity before seeing if it's actually a problem.
-#
-# Fextralife and Bellular News added 11 Aug 2026, tiered "niche" for
-# consistency with Kinda Funny Games - all three are YouTube-native
-# creator channels rather than institutional press outlets, even where
-# large/well-regarded (Fextralife: 1.17m subs; Bellular News: 537k),
-# which is the same distinction already drawn between "trusted"
-# (IGN, Digital Foundry, VGC, Game Informer - all outlets with an
-# editorial history predating YouTube) and "niche" elsewhere.
-#
-# FightinCowboy deliberately NOT added, checked live first: all 6 most
-# recent uploads at check time were numbered "Let's Play Part N" videos -
-# 100% matches for WALKTHROUGH_PATTERN below, meaning virtually nothing
-# from the channel would ever actually surface in the clustered feed.
-# Fextralife was almost added under the same suspicion (also known for
-# guide/wiki content) but checking its actual recent uploads first showed
-# the opposite - genuinely review/analysis/round-up-heavy, zero
-# walkthrough-pattern matches in the sample checked. Good reminder that
-# a channel's general reputation isn't a substitute for checking its
-# actual current output before deciding.
-#
-# DF Clips added 12 Aug 2026 - Digital Foundry's own secondary channel
-# ("Clips, reaction and highlights from Digital Foundry" per its own
-# description), tiered "trusted" to match the main Digital Foundry
-# channel since it's the same institutional outlet, not a separate
-# creator. Checked live first same as always: 6 most recent titles were
-# all genuine tech/hardware/gaming commentary ("Half-Life Alyx Running
-# On Meta Quest 3?!", "PC Settings Tweaking vs Console Curation"), zero
-# WALKTHROUGH_PATTERN matches, posting multiple times a day.
 VIDEO_SOURCES = [
     {"name": "IGN", "tier": "trusted", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCKy1dAqELo0zrOtPkf0eTMw"},
     {"name": "GameSpot", "tier": "trusted", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCbu2SsF-Or3Rsn3NxqODImw"},
@@ -162,23 +80,24 @@ WALKTHROUGH_PATTERN = re.compile(
 REVIEW_SCORE_INTERVAL_SECONDS = 3600
 MAX_OPENCRITIC_LOOKUPS_PER_DAY = 10
 
-# Release calendar (added 16 Aug 2026) - a first cut, deliberately
-# simple. Verified live before building: IGDB's API is free for
-# non-commercial use under the Twitch Developer Services Agreement,
-# rate-limited to 4 requests/second (far more than we need for a daily
-# refresh), and uses a standard OAuth2 client-credentials grant - app-
-# only auth, no interactive user login involved, fully automatable here.
-# Runs on its own slow, once-a-day cadence since release dates don't
-# change every 15 minutes the way news/video does. CALENDAR_WINDOW_DAYS
-# is how far ahead we look; CALENDAR_LOOKBACK_DAYS keeps a short trailing
-# window of very recent releases too, so the calendar page has some
-# "just released" context rather than starting completely blank at
-# exactly today. No genre/platform filtering and no attempt to exclude
-# DLC/bundle entries for this v1 - IGDB's own category/game_type fields
-# could do that, deliberately skipped rather than filter on an enum
-# value not yet verified against a real live response.
+# Release calendar (added 16 Aug 2026). First cut hit a real, concrete
+# problem the moment it ran live: IGDB tracks an enormous volume of very
+# minor/hobbyist titles (seen in practice: "Backpack Boy", "Hamster
+# Ballers" duplicated across Windows/Mac/Linux) - sorting by date
+# ascending with a limit of 200 meant the request budget was exhausted
+# within the first 3 days of a 67-day window, well before it ever got
+# anywhere close to CALENDAR_WINDOW_DAYS out. Fixed two ways: filter to
+# game.category = 0 (main_game only, per IGDB's own enum - excludes
+# DLC/bundles/etc, verified against their real docs before using it),
+# and sort by game.hypes desc (IGDB's own "follows before release"
+# field - a genuine anticipation signal) rather than date, so the 500-
+# row budget is spent on the games people are actually watching for,
+# not an arbitrary slice. The web app's own display query still sorts
+# chronologically by release_date - only the *fetching* priority
+# changed here, not the final calendar ordering.
 CALENDAR_WINDOW_DAYS = 60
 CALENDAR_LOOKBACK_DAYS = 7
+CALENDAR_FETCH_LIMIT = 500
 RELEASE_CALENDAR_INTERVAL_SECONDS = 86400
 
 _igdb_token_cache = {"token": None, "expires_at": 0}
@@ -224,14 +143,6 @@ def ensure_schema(conn):
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS liked_at TIMESTAMPTZ;")
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS like_count INTEGER NOT NULL DEFAULT 0;")
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS dislike_count INTEGER NOT NULL DEFAULT 0;")
-        # game_releases (added 16 Aug 2026) - backs the Calendar tab.
-        # One row per IGDB release_dates entry, which already represents
-        # one specific game+platform+date combination on IGDB's own side
-        # - igdb_id is that row's own id, used directly as the dedupe
-        # key rather than constructing a synthetic one. A game releasing
-        # on multiple platforms genuinely produces multiple rows here,
-        # one per platform - accepted as a v1 simplification rather than
-        # merging platforms into a single display row.
         cur.execute("""
             CREATE TABLE IF NOT EXISTS game_releases (
                 id SERIAL PRIMARY KEY,
@@ -616,10 +527,10 @@ def fetch_upcoming_releases(conn):
             "Accept": "application/json",
         },
         data=(
-            "fields game.name, game.cover.image_id, platform.name, date, human; "
-            f"where date > {start} & date < {end}; "
-            "sort date asc; "
-            "limit 200;"
+            "fields game.name, game.cover.image_id, game.hypes, platform.name, date, human; "
+            f"where date > {start} & date < {end} & game.category = 0; "
+            "sort game.hypes desc; "
+            f"limit {CALENDAR_FETCH_LIMIT};"
         ),
         timeout=20,
     )
