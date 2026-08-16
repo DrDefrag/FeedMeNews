@@ -24,52 +24,6 @@ OPENCRITIC_HOST = "opencritic-api.p.rapidapi.com"
 IGDB_CLIENT_ID = os.environ.get("IGDB_CLIENT_ID")
 IGDB_CLIENT_SECRET = os.environ.get("IGDB_CLIENT_SECRET")
 
-# Game Developer, The Indie Informer, and Indie Game Reviewer added 12
-# Aug 2026, following a discussion about diversifying sources rather
-# than just adding volume. Checked live first, same as always:
-#
-# Game Developer (gamedeveloper.com, formerly Gamasutra) - tiered
-# "trusted": a real professional trade publication (industry/craft
-# news - layoffs, acquisitions, design deep-dives - a genuinely
-# different angle from our existing consumer-press sources), owned by
-# Informa Tech Target (confirmed via Wikipedia), independent of the
-# Ziff Davis/Future plc/Valnet/Hookshot Media concentration already
-# found among our other sources. Publishes several times daily.
-#
-# The Indie Informer and Indie Game Reviewer - both tiered "niche":
-# small, genuinely independent teams (Indie Informer is Patreon-funded;
-# Indie Game Reviewer's own About page describes it as "an
-# independently operated website," running since 2007), covering indie
-# games exclusively - the specific gap asked for. Indie Game Reviewer
-# publishes roughly weekly rather than daily - lower cadence than our
-# other sources, worth knowing going in, but still genuine, verified
-# activity (confirmed via actual feed pubDates, not a stale-looking
-# featured/pinned carousel on the homepage, which turned out to be
-# misleading on its own).
-#
-# r/IndieDev and indie YouTube curator Jupiter Hadley were both
-# checked and deliberately NOT added: r/IndieDev's real content is
-# almost entirely self-promotional WIP showcases (GIFs/screenshots of
-# one dev's own project) rather than news that could ever cluster with
-# anything else - adding it would just recreate the single-source
-# noise problem MIN_SOURCES_DEFAULT already exists to manage. Jupiter
-# Hadley's current uploads are 100% numbered "Part N" jam playthroughs
-# - a complete WALKTHROUGH_PATTERN match, meaning virtually nothing
-# from the channel would ever surface, same outcome as FightinCowboy
-# earlier.
-#
-# GamesIndustry.biz added 12 Aug 2026, tiered "trusted" (consistent
-# with Game Developer - both are professional industry-trade press,
-# not consumer gaming news, regardless of shared ownership with
-# differently-tiered siblings). Deliberately added DESPITE being part
-# of the Gamer Network/IGN Entertainment/Ziff Davis group already
-# represented by IGN, Eurogamer, Rock Paper Shotgun, and VG247 - the
-# user's own reasoning: having it explicitly flagged as part of that
-# group via the ownership-transparency feature is *more* useful than
-# treating the overlap as a reason to exclude it. The point of that
-# feature is surfacing exactly this kind of connection, not avoiding
-# sources that would reveal one. Checked live first regardless: real
-# RSS feed at /feed, publishing several times a day, genuinely current.
 RSS_SOURCES = [
     {"name": "IGN", "tier": "trusted", "url": "https://www.ign.com/rss/articles/feed?tags=games"},
     {"name": "Polygon", "tier": "trusted", "url": "https://www.polygon.com/feed/"},
@@ -98,42 +52,6 @@ REDDIT_SOURCES = [
     {"name": "r/PS5", "tier": "community", "url": "https://www.reddit.com/r/PS5/.rss"},
 ]
 
-# YouTube RSS via channel_id - no API key, no OAuth, no quota. Channel IDs
-# found by loading each channel page and reading the link rel=alternate
-# type=application/rss+xml tag YouTube includes by default - the handle
-# (@name) is not the same as the channel_id needed here. Verified live on
-# 10 Aug 2026: all 7 parse cleanly with feedparser (unlike Reddit's Atom
-# variant, which needed manual ElementTree parsing - YouTube's is standard).
-# Some entries are YouTube Shorts, not full videos - left in for now rather
-# than adding filtering complexity before seeing if it's actually a problem.
-#
-# Fextralife and Bellular News added 11 Aug 2026, tiered "niche" for
-# consistency with Kinda Funny Games - all three are YouTube-native
-# creator channels rather than institutional press outlets, even where
-# large/well-regarded (Fextralife: 1.17m subs; Bellular News: 537k),
-# which is the same distinction already drawn between "trusted"
-# (IGN, Digital Foundry, VGC, Game Informer - all outlets with an
-# editorial history predating YouTube) and "niche" elsewhere.
-#
-# FightinCowboy deliberately NOT added, checked live first: all 6 most
-# recent uploads at check time were numbered "Let's Play Part N" videos -
-# 100% matches for WALKTHROUGH_PATTERN below, meaning virtually nothing
-# from the channel would ever actually surface in the clustered feed.
-# Fextralife was almost added under the same suspicion (also known for
-# guide/wiki content) but checking its actual recent uploads first showed
-# the opposite - genuinely review/analysis/round-up-heavy, zero
-# walkthrough-pattern matches in the sample checked. Good reminder that
-# a channel's general reputation isn't a substitute for checking its
-# actual current output before deciding.
-#
-# DF Clips added 12 Aug 2026 - Digital Foundry's own secondary channel
-# ("Clips, reaction and highlights from Digital Foundry" per its own
-# description), tiered "trusted" to match the main Digital Foundry
-# channel since it's the same institutional outlet, not a separate
-# creator. Checked live first same as always: 6 most recent titles were
-# all genuine tech/hardware/gaming commentary ("Half-Life Alyx Running
-# On Meta Quest 3?!", "PC Settings Tweaking vs Console Curation"), zero
-# WALKTHROUGH_PATTERN matches, posting multiple times a day.
 VIDEO_SOURCES = [
     {"name": "IGN", "tier": "trusted", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCKy1dAqELo0zrOtPkf0eTMw"},
     {"name": "GameSpot", "tier": "trusted", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCbu2SsF-Or3Rsn3NxqODImw"},
@@ -150,38 +68,12 @@ VIDEO_SOURCES = [
 HEADERS = {"User-Agent": "gaming-news-aggregator/0.1 (personal project)"}
 ATOM_NS = {"a": "http://www.w3.org/2005/Atom"}
 
-# Small pause between requests to the same host so we don't trip rate
-# limits by hitting it repeatedly in immediate succession. Press outlets
-# and YouTube haven't shown any sensitivity to this; Reddit has, so it
-# gets its own, longer delay below.
 REQUEST_DELAY_SECONDS = 5
-
-# Found empirically on 10 Aug 2026: 5s between Reddit requests was fine
-# with only 2 subreddits, but after adding r/NintendoSwitch and r/PS5
-# (4 subreddits total), 3 of the 4 started hitting 429s consistently
-# across multiple full runs - only the first request in the sequence
-# succeeded reliably. 5s isn't enough spacing once several Reddit requests
-# happen in the same short window; giving Reddit specifically more room
-# between requests than the press feeds need.
 REDDIT_REQUEST_DELAY_SECONDS = 15
 
-# Story clustering settings. Tuned empirically against real data on 9 Aug
-# 2026: threshold 0.4 gives ~25 clusters out of ~290 articles, with the
-# large multi-source clusters (4+ outlets on the same real story) coming
-# out clean.
 CLUSTER_WINDOW_DAYS = 4
 CLUSTER_SIMILARITY_THRESHOLD = 0.4
 
-# Some game-announcement titles are almost entirely boilerplate
-# ("<Game> - Official Release Date Trailer") which previously caused
-# unrelated games to cluster together purely on shared template words.
-# Extending the stopword list to cover this class of boilerplate fixed it
-# without breaking genuine multi-source clusters (verified against real
-# data, 9 Aug 2026). Known remaining gap found 10 Aug 2026: multi-game
-# showcase events (e.g. "THQ Nordic Showcase 2026") can still merge
-# different games' trailer coverage together, since the shared event name
-# is specific meaningful text, not generic filler we can safely strip the
-# same way - deferred, needs its own proper fix, not a quick stopword add.
 EXTRA_STOPWORDS = {
     "official", "release", "date", "trailer", "reveal", "gameplay",
     "announcement", "announced", "launches", "launch", "coming", "new",
@@ -189,44 +81,15 @@ EXTRA_STOPWORDS = {
 STOPWORDS = list(ENGLISH_STOP_WORDS.union(EXTRA_STOPWORDS))
 STOPWORDS_SET = set(STOPWORDS)
 
-# Walkthroughs/playthroughs are serial (Part 1, Part 2, ...) rather than
-# episodic like everything else we ingest - clustering them would either
-# flood the feed with near-identical singleton cards, or worse, merge them
-# into a nonsense "story" that isn't really one. Detected the same way as
-# review titles (a simple pattern match) and excluded from clustering
-# entirely below - the raw rows are still kept in the articles table, just
-# never linked to a story, so nothing is thrown away, it's just not shown.
 WALKTHROUGH_PATTERN = re.compile(
     r"\b(walkthrough|playthrough|let'?s play|full\s+playthrough|part\s*\d+)\b",
     re.IGNORECASE,
 )
 
-# Review score lookups (OpenCritic via RapidAPI). Free tier: 25 searches/day,
-# 200 requests/day, non-commercial use only. Detection (is_review flag) is
-# free and runs every ingestion cycle so review stories move into the
-# Reviews section quickly; the actual OpenCritic query is the part that
-# costs quota, so it runs on its own slower cadence with a tracked daily
-# budget. Lowered from 20 to 10 on 10 Aug 2026 after the user flagged
-# being at 85% of the RapidAPI daily allowance - 20/25 was only ever an
-# 80% self-imposed ceiling by design, too close for comfort especially
-# now that more video sources mean more titles containing "review" per
-# day than before.
 REVIEW_SCORE_INTERVAL_SECONDS = 3600
 MAX_OPENCRITIC_LOOKUPS_PER_DAY = 10
 
-# Release calendar refresh cadence (added 16 Aug 2026). Release dates
-# don't change every 15 minutes the way news does, so this runs on its
-# own much slower daily cadence rather than every ingestion cycle -
-# same pattern as the OpenCritic budget gate above, just time-based
-# instead of count-based since IGDB's rate limit (4/sec) isn't remotely
-# a constraint here.
 CALENDAR_REFRESH_INTERVAL_SECONDS = 86400
-
-# How far back and forward to pull releases. A small trailing window
-# (not just future dates) is deliberate: it's what lets a just-released
-# game still show up with its OpenCritic score once one exists, rather
-# than the calendar and the score always being one day out of sync with
-# each other.
 CALENDAR_DAYS_PAST = 7
 CALENDAR_DAYS_FUTURE = 60
 
@@ -263,55 +126,14 @@ def ensure_schema(conn):
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS opencritic_checked_at TIMESTAMPTZ;")
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ;")
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS dismissed_at TIMESTAMPTZ;")
-        # archived_at: added to support a since-removed separate Read tab.
-        # No longer used by the app (dismissed_at alone means "hide
-        # immediately" everywhere now) - left in place, harmless, not
-        # worth a migration to remove.
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;")
         cur.execute("ALTER TABLE articles ADD COLUMN IF NOT EXISTS is_video BOOLEAN NOT NULL DEFAULT FALSE;")
         cur.execute("ALTER TABLE articles ADD COLUMN IF NOT EXISTS is_walkthrough BOOLEAN NOT NULL DEFAULT FALSE;")
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS is_video BOOLEAN NOT NULL DEFAULT FALSE;")
-        # image_url (added 11 Aug 2026). Checked live against all 25
-        # sources before building this: 14/14 press RSS and 7/7 YouTube
-        # channels reliably include a real image; Reddit's .rss format
-        # has none at all (checked the full raw feed, not just one
-        # entry, across two subreddits - genuinely zero, not a fluke).
-        # We hotlink the outlet's own URL here, never download or
-        # re-host the actual image file ourselves.
         cur.execute("ALTER TABLE articles ADD COLUMN IF NOT EXISTS image_url TEXT;")
-        # liked_at (added 11 Aug 2026). A third explicit signal alongside
-        # read_at (passive click-through) and dismissed_at (explicit
-        # negative) - an explicit positive signal, toggled via a Like
-        # button on each feed card. Stronger training data for the
-        # Themes page's future interest-profile idea than read_at alone,
-        # since opening something isn't the same as actually liking it.
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS liked_at TIMESTAMPTZ;")
-        # like_count / dislike_count (added 14 Aug 2026). Replaces an
-        # earlier community_sentiment stub (a schema column + comment
-        # describing a critic-vs-community divergence chip that was
-        # never actually built - no function, nothing in the web app
-        # reading it - genuinely dead, removed rather than left in
-        # place, unlike liked_at above which was a real, working
-        # feature before being superseded). Reader-driven sentiment
-        # instead: real explicit up/down votes rather than inferred
-        # from Reddit thread titles, which would have needed either a
-        # crude local sentiment library or a paid per-story LLM call
-        # to do honestly. Simple incrementing counters, no per-voter
-        # table - a determined person could vote more than once (no
-        # accounts exist yet to prevent it), mitigated client-side in
-        # the web app via a localStorage check, same category of
-        # limitation as the shared read/like state elsewhere until
-        # real accounts exist.
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS like_count INTEGER NOT NULL DEFAULT 0;")
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS dislike_count INTEGER NOT NULL DEFAULT 0;")
-        # game_releases (added 16 Aug 2026): the release calendar. One
-        # row per game+platform+date combination, matching IGDB's own
-        # release_dates endpoint shape directly rather than trying to
-        # collapse platforms into one row - a game releasing on three
-        # platforms on three different dates is genuinely three separate
-        # calendar entries, not one. igdb_release_id is IGDB's own ID for
-        # that specific release_dates record, used as the natural
-        # dedupe/upsert key.
         cur.execute("""
             CREATE TABLE IF NOT EXISTS game_releases (
                 id SERIAL PRIMARY KEY,
@@ -327,16 +149,6 @@ def ensure_schema(conn):
 
 
 def extract_image_url(entry):
-    """Pull a hotlinkable image URL out of a feedparser entry.
-
-    Checked in priority order against real feeds on 11 Aug 2026: standard
-    media:thumbnail (most outlets and all YouTube channels), media:content
-    (GameSpot, Eurogamer, Rock Paper Shotgun, VG247), image enclosures
-    (Kotaku, TheGamer), then finally a raw <img> inside the HTML summary
-    as a last resort. Returns None if nothing is found - callers store
-    that as-is rather than guessing, so a story with no image just shows
-    no image slot, never a broken one.
-    """
     if getattr(entry, "media_thumbnail", None):
         url = entry.media_thumbnail[0].get("url")
         if url:
@@ -388,8 +200,6 @@ def fetch_rss(conn, source):
 
 
 def fetch_video(conn, source):
-    # YouTube's channel Atom feeds parse fine with feedparser (unlike
-    # Reddit's), verified live on 10 Aug 2026 against all 7 channels.
     feed = feedparser.parse(source["url"])
     for entry in feed.entries:
         title = entry.get("title", "").strip()
@@ -404,15 +214,6 @@ def fetch_video(conn, source):
 
 
 def fetch_reddit(conn, source):
-    # Reddit blocks anonymous requests to its .json endpoints from most
-    # datacenter/hosting IP ranges, but its older .rss (Atom) endpoint is
-    # not subject to the same block, just normal rate limits. We parse it
-    # directly with ElementTree since feedparser doesn't reliably detect
-    # entries in this particular Atom feed variant. No image extraction
-    # here - checked live on 11 Aug 2026, Reddit's .rss format carries no
-    # thumbnail/media/enclosure/img data at all across the full raw feed,
-    # not just a single entry, across two different subreddits. A genuine
-    # gap, not worth extra plumbing for - image_url stays NULL for these.
     resp = requests.get(source["url"], headers=HEADERS, timeout=15)
     resp.raise_for_status()
     root = ET.fromstring(resp.content)
@@ -459,17 +260,6 @@ def run_once(conn):
 
 
 def cluster_recent_articles(conn):
-    """Group articles covering the same real-world story together.
-
-    Recomputes clustering from scratch over a rolling time window every
-    run (cheap at our scale: low hundreds of rows). To keep story_id
-    values stable across runs rather than reshuffling every time, any
-    cluster that already has one or more story_id values assigned keeps
-    the smallest (earliest-created) one as canonical, and every member of
-    that cluster gets updated to match it. Walkthroughs are excluded
-    entirely (see WALKTHROUGH_PATTERN above) - they never get a story_id,
-    so they never surface anywhere, by design.
-    """
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -542,13 +332,6 @@ def cluster_recent_articles(conn):
 
 
 def mark_review_stories(conn):
-    """Flag review-titled stories immediately, every cycle - free, no API
-    calls. This is what makes a story show up in the Reviews section
-    quickly; the (quota-limited) score lookup below is a separate, slower
-    step that can catch up later without delaying the story appearing.
-    Source-agnostic - a video review's title matches exactly the same way
-    a text review's does.
-    """
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE stories SET is_review = TRUE WHERE title ILIKE %s AND is_review = FALSE",
@@ -558,11 +341,6 @@ def mark_review_stories(conn):
 
 
 def mark_video_stories(conn):
-    """Flag any story that has at least one video-sourced article, every
-    cycle - free, just a join. A story can be both is_review and is_video
-    at once (a video review) - that's intentional, it should surface in
-    both the Reviews and Video tabs rather than forcing an either/or.
-    """
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -575,14 +353,6 @@ def mark_video_stories(conn):
 
 
 def extract_game_name(title):
-    """Pull a clean game name out of a review-style headline.
-
-    Handles "Review: Game Name - subtitle", "Game Name Review: subtitle",
-    and "<word> Review: Game Name" (e.g. "Mini Review: Dragon House").
-    Imperfect on purpose - simple heuristic, backed up by
-    match_is_plausible() below so a bad extraction produces no result
-    rather than a wrong one.
-    """
     t = title.strip()
     m = re.match(r"^(?:\w+\s+)?review\s*[:\-\u2013\u2014]\s*(.+)$", t, re.IGNORECASE)
     if m:
@@ -598,18 +368,6 @@ def extract_game_name(title):
 
 
 def match_is_plausible(query, matched_name):
-    """Reject a search match that shares no real word with the query.
-
-    Found empirically on 9 Aug 2026: without this check, "Mini Review:
-    Dragon House..." matched to the unrelated game "Minit" (similar
-    string, zero shared words), and "Asus ROG Zephyrus G16 (2026) review"
-    (a laptop, not a game) matched to an unrelated game called "Cosmic
-    Zephyr DX" purely on fuzzy name similarity. Requiring at least one
-    exact shared word (after removing stopwords) catches both without
-    needing a calibrated similarity threshold. Known remaining gap: two
-    different real games sharing one generic word (e.g. "Dragon Hopper"
-    vs "Dragon Sinker") can still pass - accepted as a v1 tradeoff.
-    """
     def tokens(s):
         return set(re.findall(r"[a-z0-9]+", s.lower()))
 
@@ -724,12 +482,6 @@ _igdb_token_cache = {"access_token": None, "expires_at": 0}
 
 
 def get_igdb_token():
-    """Client-credentials OAuth2 flow against Twitch's token endpoint -
-    no interactive login involved, this is pure server-to-server auth.
-    Twitch's tokens are long-lived (IGDB's own docs example shows
-    expires_in around 64 days), so we cache in memory for the life of
-    this process and only re-fetch once actually close to expiry.
-    """
     now = time.time()
     if _igdb_token_cache["access_token"] and now < _igdb_token_cache["expires_at"] - 60:
         return _igdb_token_cache["access_token"]
@@ -754,11 +506,19 @@ def fetch_upcoming_releases(conn):
     """Release calendar (added 16 Aug 2026). Pulls IGDB's release_dates
     endpoint for a window spanning CALENDAR_DAYS_PAST behind to
     CALENDAR_DAYS_FUTURE ahead, filtered to game.game_type = 0 (main
-    games only - excludes DLC, expansions, ports, ports, mods, updates,
-    so ports/re-releases of the same base game don't clutter the
-    calendar). One row per game+platform+date combination, matching how
-    IGDB itself models a release_dates record - upserted on
-    igdb_release_id so re-running this doesn't create duplicates.
+    games only). One row per game+platform+date combination, upserted
+    on igdb_release_id.
+
+    Sorted by game.hypes desc rather than date - found live on 16 Aug
+    2026 that IGDB tracks an enormous volume of very minor/hobbyist
+    titles, so a plain date-ascending sort combined with any reasonable
+    row limit exhausts the budget within the first few days of the
+    window, well short of CALENDAR_DAYS_FUTURE out. Sorting by hype
+    (IGDB's own "follows before release" field, a genuine anticipation
+    signal) instead spends the row budget on the games people are
+    actually watching for. The web app's own display query still sorts
+    chronologically by release_date - only the fetching priority
+    changed here, not the final calendar ordering.
     """
     if not IGDB_CLIENT_ID or not IGDB_CLIENT_SECRET:
         print("[skip] IGDB_CLIENT_ID/IGDB_CLIENT_SECRET not set, skipping release calendar")
@@ -777,9 +537,9 @@ def fetch_upcoming_releases(conn):
             "Accept": "application/json",
         },
         data=(
-            "fields game.name, game.cover.url, game.game_type, platform.name, date;"
+            "fields game.name, game.cover.url, game.game_type, game.hypes, platform.name, date;"
             f" where date > {start_ts} & date < {end_ts} & game.game_type = 0;"
-            " sort date asc; limit 200;"
+            " sort game.hypes desc; limit 500;"
         ),
         timeout=20,
     )
