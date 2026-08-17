@@ -5,7 +5,7 @@ import feedparser
 import requests
 import xml.etree.ElementTree as ET
 import psycopg2
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from sklearn.feature_extraction.text import TfidfVectorizer, ENGLISH_STOP_WORDS
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -89,9 +89,27 @@ WALKTHROUGH_PATTERN = re.compile(
 REVIEW_SCORE_INTERVAL_SECONDS = 3600
 MAX_OPENCRITIC_LOOKUPS_PER_DAY = 10
 
-CALENDAR_REFRESH_INTERVAL_SECONDS = 86400
-CALENDAR_DAYS_PAST = 7
-CALENDAR_DAYS_FUTURE = 60
+# Release calendar (added 16 Aug 2026, fixed same day). Real bug found
+# live on 17 Aug 2026: sorting by game.hypes desc to prioritize the
+# fetch budget seemed sound, but IGDB places NULL hype values *first*
+# in a descending sort rather than last - verified directly: our top
+# 500 had a minimum hype of 0 with 267 null-hype entries consuming the
+# budget, while genuinely anticipated titles (Mortal Shell II, hype 80;
+# "Control Resonant", hype 201) were sitting excluded past the cutoff.
+# Fixed by excluding untracked-hype entries entirely via
+# game.hypes != null in the where clause, so the budget is spent purely
+# on games IGDB has real anticipation data for. Also added game.slug and
+# game.summary so the web app can link to the game's real IGDB page and
+# show a short description without a second API call. Lookback trimmed
+# to 1 day (down from 7) - the web app itself only ever displays
+# release_date >= today, so fetching much further back was pointless
+# stored-but-unused data.
+CALENDAR_WINDOW_DAYS = 60
+CALENDAR_LOOKBACK_DAYS = 1
+CALENDAR_FETCH_LIMIT = 500
+RELEASE_CALENDAR_INTERVAL_SECONDS = 86400
+
+_igdb_token_cache = {"access_token": None, "expires_at": 0}
 
 
 def ensure_schema(conn):
@@ -145,6 +163,8 @@ def ensure_schema(conn):
                 fetched_at TIMESTAMPTZ NOT NULL DEFAULT now()
             );
         """)
+        cur.execute("ALTER TABLE game_releases ADD COLUMN IF NOT EXISTS game_slug TEXT;")
+        cur.execute("ALTER TABLE game_releases ADD COLUMN IF NOT EXISTS summary TEXT;")
     conn.commit()
 
 
@@ -478,9 +498,6 @@ def enrich_review_scores(conn):
         time.sleep(REQUEST_DELAY_SECONDS)
 
 
-_igdb_token_cache = {"access_token": None, "expires_at": 0}
-
-
 def get_igdb_token():
     now = time.time()
     if _igdb_token_cache["access_token"] and now < _igdb_token_cache["expires_at"] - 60:
@@ -503,31 +520,14 @@ def get_igdb_token():
 
 
 def fetch_upcoming_releases(conn):
-    """Release calendar (added 16 Aug 2026). Pulls IGDB's release_dates
-    endpoint for a window spanning CALENDAR_DAYS_PAST behind to
-    CALENDAR_DAYS_FUTURE ahead, filtered to game.game_type = 0 (main
-    games only). One row per game+platform+date combination, upserted
-    on igdb_release_id.
-
-    Sorted by game.hypes desc rather than date - found live on 16 Aug
-    2026 that IGDB tracks an enormous volume of very minor/hobbyist
-    titles, so a plain date-ascending sort combined with any reasonable
-    row limit exhausts the budget within the first few days of the
-    window, well short of CALENDAR_DAYS_FUTURE out. Sorting by hype
-    (IGDB's own "follows before release" field, a genuine anticipation
-    signal) instead spends the row budget on the games people are
-    actually watching for. The web app's own display query still sorts
-    chronologically by release_date - only the fetching priority
-    changed here, not the final calendar ordering.
-    """
     if not IGDB_CLIENT_ID or not IGDB_CLIENT_SECRET:
         print("[skip] IGDB_CLIENT_ID/IGDB_CLIENT_SECRET not set, skipping release calendar")
         return
 
     token = get_igdb_token()
     now_ts = int(time.time())
-    start_ts = now_ts - CALENDAR_DAYS_PAST * 86400
-    end_ts = now_ts + CALENDAR_DAYS_FUTURE * 86400
+    start_ts = now_ts - CALENDAR_LOOKBACK_DAYS * 86400
+    end_ts = now_ts + CALENDAR_WINDOW_DAYS * 86400
 
     resp = requests.post(
         "https://api.igdb.com/v4/release_dates",
@@ -537,9 +537,9 @@ def fetch_upcoming_releases(conn):
             "Accept": "application/json",
         },
         data=(
-            "fields game.name, game.cover.url, game.game_type, game.hypes, platform.name, date;"
-            f" where date > {start_ts} & date < {end_ts} & game.game_type = 0;"
-            " sort game.hypes desc; limit 500;"
+            "fields game.name, game.cover.url, game.game_type, game.hypes, game.slug, game.summary, platform.name, date;"
+            f" where date > {start_ts} & date < {end_ts} & game.game_type = 0 & game.hypes != null;"
+            " sort game.hypes desc; limit " + str(CALENDAR_FETCH_LIMIT) + ";"
         ),
         timeout=20,
     )
@@ -557,23 +557,27 @@ def fetch_upcoming_releases(conn):
                 continue
             release_date = datetime.fromtimestamp(date_ts, tz=timezone.utc).date()
             platform = (row.get("platform") or {}).get("name")
-            cover_url = (game.get("cover") or {}).get("url")
+            cover_url = game.get("cover", {}).get("url") if game.get("cover") else None
             if cover_url:
                 if cover_url.startswith("//"):
                     cover_url = "https:" + cover_url
                 cover_url = cover_url.replace("t_thumb", "t_cover_big")
+            game_slug = game.get("slug")
+            summary = game.get("summary")
             cur.execute(
                 """
-                INSERT INTO game_releases (igdb_release_id, game_name, platform, release_date, cover_url)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO game_releases (igdb_release_id, game_name, platform, release_date, cover_url, game_slug, summary)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (igdb_release_id) DO UPDATE SET
                     game_name = EXCLUDED.game_name,
                     platform = EXCLUDED.platform,
                     release_date = EXCLUDED.release_date,
                     cover_url = EXCLUDED.cover_url,
+                    game_slug = EXCLUDED.game_slug,
+                    summary = EXCLUDED.summary,
                     fetched_at = now()
                 """,
-                (release_id, name, platform, release_date, cover_url),
+                (release_id, name, platform, release_date, cover_url, game_slug, summary),
             )
             upserted += 1
     conn.commit()
@@ -621,7 +625,7 @@ def main():
 
         due_calendar = (
             last_calendar_check is None
-            or (now - last_calendar_check).total_seconds() >= CALENDAR_REFRESH_INTERVAL_SECONDS
+            or (now - last_calendar_check).total_seconds() >= RELEASE_CALENDAR_INTERVAL_SECONDS
         )
         if due_calendar:
             try:
