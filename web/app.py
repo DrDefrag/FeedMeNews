@@ -872,6 +872,79 @@ font-weight: 600;
 color: var(--text-secondary);
 margin: 0 0 6px 2px;
 }
+.feed-sidebar {
+display: none;
+}
+.sidebar-section {
+margin-bottom: 26px;
+}
+.sidebar-section-header {
+display: flex;
+justify-content: space-between;
+align-items: baseline;
+margin-bottom: 10px;
+}
+.sidebar-item {
+display: flex;
+gap: 10px;
+padding: 8px 0;
+border-bottom: 1px solid var(--border);
+}
+.sidebar-item:last-child {
+border-bottom: none;
+}
+.sidebar-item-image {
+width: 64px;
+height: 64px;
+border-radius: 8px;
+object-fit: cover;
+background: var(--border);
+flex-shrink: 0;
+}
+.sidebar-item-body {
+min-width: 0;
+}
+.sidebar-item-title {
+font-size: 13px;
+font-weight: 600;
+line-height: 1.35;
+margin: 0 0 4px;
+display: -webkit-box;
+-webkit-line-clamp: 2;
+-webkit-box-orient: vertical;
+overflow: hidden;
+}
+.sidebar-item-meta {
+font-size: 11.5px;
+color: var(--text-secondary);
+}
+.sidebar-score-chip {
+font-size: 11px;
+font-weight: 700;
+padding: 1px 7px;
+border-radius: 20px;
+display: inline-block;
+margin-right: 6px;
+}
+@media (min-width: 1040px) {
+header, .tabs, .segmented, .source-filter, .legend, main {
+max-width: 1000px;
+}
+.feed-layout {
+display: grid;
+grid-template-columns: minmax(0, 1fr) 320px;
+gap: 36px;
+align-items: start;
+}
+.feed-sidebar {
+display: block;
+position: sticky;
+top: 24px;
+}
+.mobile-rail {
+display: none;
+}
+}
 """
 
 CARD_INTERACTIONS_JS = """
@@ -1135,7 +1208,7 @@ TOPICS_RAIL_HTML = """
 
 VIDEO_RAIL_HTML = """
 {% if video_rail %}
-<div class="rail-section">
+<div class="rail-section mobile-rail">
 <div class="rail-header"><span class="rail-title">New video</span><a class="rail-see-all" href="/video">See all &rarr;</a></div>
 <div class="rail-scroll">
 {% for item in video_rail %}
@@ -1154,7 +1227,7 @@ VIDEO_RAIL_HTML = """
 
 TRENDING_RAIL_HTML = """
 {% if trending %}
-<div class="rail-section">
+<div class="rail-section mobile-rail">
 <div class="rail-header"><span class="rail-title">Trending</span></div>
 <div class="rail-scroll">
 {% for item in trending %}
@@ -1173,7 +1246,7 @@ TRENDING_RAIL_HTML = """
 
 REVIEW_RAIL_HTML = """
 {% if review_rail %}
-<div class="rail-section">
+<div class="rail-section mobile-rail">
 <div class="rail-header"><span class="rail-title">Latest reviews</span><a class="rail-see-all" href="/reviews">See all &rarr;</a></div>
 <div class="rail-scroll">
 {% for item in review_rail %}
@@ -1191,6 +1264,65 @@ REVIEW_RAIL_HTML = """
 </div>
 </div>
 {% endif %}
+"""
+
+# Desktop sidebar (added 17 Aug 2026): reuses the exact same trending /
+# video_rail / review_rail data as the mobile rails above - no new
+# queries - just a vertical, persistent (sticky) layout instead of a
+# horizontal scroll strip that only appears once between cards. Hidden
+# by default (feed-sidebar has display:none), shown only past the
+# 1040px breakpoint where the mobile-rail versions above get hidden
+# instead. Topics deliberately stays out of this sidebar and remains a
+# horizontal strip at the top on all screen sizes, per the "start
+# safer" scope agreed with the user - the fuller 3-column Ground
+# News-style layout (Topics as a left rail too) is a possible later
+# step, not part of this pass.
+SIDEBAR_RAIL_HTML = """
+<aside class="feed-sidebar">
+{% if trending %}
+<div class="sidebar-section">
+<div class="sidebar-section-header"><span class="rail-title">Trending</span></div>
+{% for item in trending %}
+<a class="sidebar-item" href="/story/{{ item.id }}">
+{% if item.image_url %}<img class="sidebar-item-image" src="{{ item.image_url }}" loading="lazy" alt="">{% endif %}
+<div class="sidebar-item-body">
+<p class="sidebar-item-title">{{ item.title }}</p>
+<p class="sidebar-item-meta">{{ item.n }} source{{ 's' if item.n != 1 else '' }} &middot; {{ item.time_ago }}</p>
+</div>
+</a>
+{% endfor %}
+</div>
+{% endif %}
+{% if video_rail %}
+<div class="sidebar-section">
+<div class="sidebar-section-header"><span class="rail-title">New video</span><a class="rail-see-all" href="/video">See all &rarr;</a></div>
+{% for item in video_rail %}
+<a class="sidebar-item" href="/story/{{ item.id }}">
+{% if item.image_url %}<img class="sidebar-item-image" src="{{ item.image_url }}" loading="lazy" alt="">{% endif %}
+<div class="sidebar-item-body">
+<p class="sidebar-item-title">{{ item.title }}</p>
+<p class="sidebar-item-meta">{{ item.time_ago }}</p>
+</div>
+</a>
+{% endfor %}
+</div>
+{% endif %}
+{% if review_rail %}
+<div class="sidebar-section">
+<div class="sidebar-section-header"><span class="rail-title">Latest reviews</span><a class="rail-see-all" href="/reviews">See all &rarr;</a></div>
+{% for item in review_rail %}
+<a class="sidebar-item" href="/story/{{ item.id }}">
+{% if item.image_url %}<img class="sidebar-item-image" src="{{ item.image_url }}" loading="lazy" alt="">{% endif %}
+<div class="sidebar-item-body">
+{% if item.opencritic_score and item.opencritic_score > 0 %}<span class="sidebar-score-chip" style="background:var(--{{ (item.opencritic_tier or 'strong')|lower }}-bg); color:var(--{{ (item.opencritic_tier or 'strong')|lower }}-fg);">{{ item.opencritic_score|round|int }}</span>{% endif %}
+<p class="sidebar-item-title">{{ item.title }}</p>
+<p class="sidebar-item-meta">{{ item.time_ago }}</p>
+</div>
+</a>
+{% endfor %}
+</div>
+{% endif %}
+</aside>
 """
 
 CARD_HTML = """
@@ -1267,6 +1399,8 @@ MAIN_TEMPLATE = """<!doctype html>
 <span><span class="dot" style="background:var(--comm)"></span>Community</span>
 </div>
 <main>
+<div class="feed-layout">
+<div class="feed-main">
 """ + TOPICS_RAIL_HTML + VIDEO_RAIL_HTML + """
 {% for story in stories_part1 %}""" + CARD_HTML + """{% endfor %}
 """ + TRENDING_RAIL_HTML + """
@@ -1276,6 +1410,9 @@ MAIN_TEMPLATE = """<!doctype html>
 {% if not stories %}
 <p class="meta">Nothing here yet.</p>
 {% endif %}
+</div>
+""" + SIDEBAR_RAIL_HTML + """
+</div>
 </main>
 """ + CARD_INTERACTIONS_JS + VOTE_INTERACTIONS_JS + BACK_TO_TOP_HTML + PULL_TO_REFRESH_HTML + """
 </body>
