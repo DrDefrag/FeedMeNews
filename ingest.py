@@ -564,9 +564,10 @@ def fetch_upcoming_releases(conn):
                 cover_url = cover_url.replace("t_thumb", "t_cover_big")
             game_slug = game.get("slug")
             summary = game.get("summary")
+            hype = game.get("hypes")
             cur.execute(
                 """
-                INSERT INTO game_releases (igdb_release_id, game_name, platform, release_date, cover_url, game_slug, summary)
+                INSERT INTO game_releases (igdb_release_id, game_name, platform, release_date, cover_url, game_slug, summary, hype)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (igdb_release_id) DO UPDATE SET
                     game_name = EXCLUDED.game_name,
@@ -575,9 +576,10 @@ def fetch_upcoming_releases(conn):
                     cover_url = EXCLUDED.cover_url,
                     game_slug = EXCLUDED.game_slug,
                     summary = EXCLUDED.summary,
+                    hype = EXCLUDED.hype,
                     fetched_at = now()
                 """,
-                (release_id, name, platform, release_date, cover_url, game_slug, summary),
+                (release_id, name, platform, release_date, cover_url, game_slug, summary, hype),
             )
             upserted += 1
     conn.commit()
