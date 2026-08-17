@@ -568,7 +568,7 @@ def fetch_upcoming_releases(conn):
             cur.execute(
                 """
                 INSERT INTO game_releases (igdb_release_id, game_name, platform, release_date, cover_url, game_slug, summary, hype)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (igdb_release_id) DO UPDATE SET
                     game_name = EXCLUDED.game_name,
                     platform = EXCLUDED.platform,
