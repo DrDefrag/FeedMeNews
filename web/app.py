@@ -449,7 +449,7 @@ background: var(--border);
 display: block;
 }
 .card-link.with-buttons {
-padding-top: 54px;
+padding-top: 40px;
 }
 .discard-btn {
 position: absolute;
@@ -1196,10 +1196,6 @@ REVIEW_RAIL_HTML = """
 CARD_HTML = """
 <div class="card">
 <button class="discard-btn" data-action="/story/{{ story.id }}/discard" data-id="{{ story.id }}" aria-label="Discard">""" + ICON_X + """</button>
-<div class="vote-controls" data-story-id="{{ story.id }}">
-<button class="vote-btn" data-direction="up" aria-label="Vote up">""" + ICON_THUMBS_UP + """</button>
-<button class="vote-btn" data-direction="down" aria-label="Vote down">""" + ICON_THUMBS_DOWN + """</button>
-</div>
 <a class="card-link with-buttons" href="/story/{{ story.id }}">
 {% if story.image_url %}
 <img class="card-image" src="{{ story.image_url }}" loading="lazy" alt="">
@@ -1321,8 +1317,6 @@ FEED_TEMPLATE = """<!doctype html>
 </body>
 </html>"""
 
-# Calendar entry partial, reused between the chronological (grouped by
-# date) and hyped (flat, sorted by anticipation) views added 17 Aug 2026.
 CALENDAR_ENTRY_HTML = """
 <div class="calendar-entry">
 {% if item.cover_url %}
@@ -1350,13 +1344,6 @@ CALENDAR_ENTRY_HTML = """
 </div>
 """
 
-# Calendar template (updated 17 Aug 2026 with a sort toggle): "Chronological"
-# groups by release date as before; "Most anticipated" is a flat list
-# ordered purely by IGDB's own hype signal - grouping that by date
-# wouldn't make sense, since the whole point is comparing games across
-# different dates, not re-sorting within a single day. Each entry shows
-# its own date inline in that view since there's no day header to
-# convey it otherwise.
 CALENDAR_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
@@ -1940,16 +1927,6 @@ def fetch_topic_stories(topic_key, view="recent"):
 
 
 def fetch_calendar_entries(view="chronological"):
-    """Backs the Calendar tab. Two view modes (added 17 Aug 2026):
-    "chronological" (default) groups by release date; "hyped" (Most
-    anticipated) returns a flat list sorted purely by IGDB's own hype
-    signal - grouping that by date wouldn't make sense, since the whole
-    point of that view is comparing games across different dates, not
-    re-sorting within one day. A game's hype is a per-game IGDB value,
-    identical across every platform row for it, so max() during the
-    GROUP BY is just a safe way to pick the one real value rather than
-    implying different platforms have different anticipation levels.
-    """
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     order_sql = "hype_val DESC NULLS LAST, gr.release_date ASC" if view == "hyped" else "gr.release_date ASC, gr.game_name ASC"
