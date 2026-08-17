@@ -10,9 +10,20 @@ DB_URL = os.environ["DATABASE_URL"]
 
 FEED_WINDOW_DAYS = 2
 UNDO_WINDOW_MS = 5000
-MIN_SOURCES_DEFAULT = 2
 RAIL_LIMIT = 8
 MIN_VOTES_FOR_SENTIMENT = 5
+
+# Source-count filter (added 17 Aug 2026, replacing the old binary
+# "show all / 2+ only" toggle). Default changed from 2 to 1 per the
+# user's own observation from actual daily use: with more sources and
+# topics added since the 2+ default was first chosen, genuinely
+# interesting single-source stories are surfacing regularly, and hiding
+# them by default was costing more than it saved. Kept as three
+# explicit options (1 / 2 / 3+) rather than a slider or free-form
+# number - a small, fixed set of clear choices matches how the rest of
+# this app already presents filters (Most recent/Most covered).
+MIN_SOURCES_DEFAULT = "1"
+VALID_MIN_SOURCES = ("1", "2", "3")
 
 WORD_STOPWORDS = {
     "the", "a", "an", "of", "in", "on", "for", "to", "and", "or", "with",
@@ -76,6 +87,24 @@ TOPICS = {
         "sources": ["Game Developer", "GamesIndustry.biz"],
         "keywords": None,
     },
+}
+
+# Short platform display names (added 17 Aug 2026, for the merged
+# calendar entries). IGDB's own platform names are often long or
+# formatted for a desktop context ("PC (Microsoft Windows)", "Xbox
+# Series X|S") - a plain unmapped name still displays fine via the
+# fallback below, this just tightens up the common ones so multiple
+# platform chips on one compact calendar row stay glanceable.
+PLATFORM_SHORT_NAMES = {
+    "PC (Microsoft Windows)": "PC",
+    "Mac": "Mac",
+    "Linux": "Linux",
+    "PlayStation 5": "PS5",
+    "PlayStation 4": "PS4",
+    "Xbox Series X|S": "Xbox Series X|S",
+    "Xbox One": "Xbox One",
+    "Nintendo Switch": "Switch",
+    "Nintendo Switch 2": "Switch 2",
 }
 
 ICON_MAIN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><line x1="7" y1="9" x2="17" y2="9"></line><line x1="7" y1="13" x2="17" y2="13"></line><line x1="7" y1="17" x2="13" y2="17"></line></svg>'
@@ -300,18 +329,6 @@ color: var(--text-secondary);
 background: var(--card);
 color: var(--text);
 box-shadow: 0 1px 2px rgba(0,0,0,0.08);
-}
-.filter-toggle {
-font-size: 12px;
-color: var(--text-secondary);
-padding: 0 16px 12px;
-max-width: 640px;
-margin: 0 auto;
-}
-.filter-toggle a {
-text-decoration: underline;
-font-weight: 600;
-color: var(--text-secondary);
 }
 .legend {
 display: flex;
@@ -784,6 +801,27 @@ opacity: 0;
 box-shadow: 0 2px 8px rgba(0,0,0,0.25);
 }
 .pull-indicator svg { width: 18px; height: 18px; }
+.source-filter {
+display: flex;
+gap: 8px;
+padding: 0 16px 14px;
+max-width: 640px;
+margin: 0 auto;
+}
+.source-filter-option {
+flex: 1;
+text-align: center;
+font-size: 13px;
+font-weight: 600;
+padding: 8px 0;
+border-radius: 8px;
+background: var(--border);
+color: var(--text-secondary);
+}
+.source-filter-option.active {
+background: var(--text);
+color: var(--bg);
+}
 .calendar-group {
 margin-bottom: 20px;
 }
@@ -797,16 +835,16 @@ padding: 12px;
 margin-bottom: 10px;
 }
 .calendar-cover {
-width: 56px;
-height: 74px;
+width: 64px;
+height: 85px;
 border-radius: 8px;
 object-fit: cover;
 background: var(--border);
 flex-shrink: 0;
 }
 .calendar-cover-placeholder {
-width: 56px;
-height: 74px;
+width: 64px;
+height: 85px;
 border-radius: 8px;
 background: var(--border);
 flex-shrink: 0;
@@ -816,6 +854,32 @@ font-size: 15px;
 font-weight: 600;
 margin: 0 0 4px;
 line-height: 1.35;
+}
+.calendar-platforms {
+display: flex;
+flex-wrap: wrap;
+gap: 5px;
+margin: 4px 0 6px;
+}
+.platform-chip {
+font-size: 11px;
+font-weight: 600;
+padding: 2px 8px;
+border-radius: 20px;
+background: var(--border);
+color: var(--text-secondary);
+}
+.calendar-summary {
+font-size: 12.5px;
+color: var(--text-secondary);
+line-height: 1.4;
+margin: 4px 0 6px;
+}
+.calendar-igdb-link {
+font-size: 12px;
+font-weight: 600;
+text-decoration: underline;
+color: var(--text-secondary);
 }
 """
 
@@ -1183,6 +1247,17 @@ STORY_CARD_LOOP_HTML = """
 {% endif %}
 """
 
+# Source-count filter (added 17 Aug 2026), replacing the old "N hidden,
+# Show all" toggle. Three explicit buttons rather than a toggle - see
+# MIN_SOURCES_DEFAULT above for why.
+SOURCE_FILTER_HTML = """
+<div class="source-filter">
+<a href="{{ min1_url }}" class="source-filter-option {{ 'active' if min_sources == '1' else '' }}">1 source</a>
+<a href="{{ min2_url }}" class="source-filter-option {{ 'active' if min_sources == '2' else '' }}">2 sources</a>
+<a href="{{ min3_url }}" class="source-filter-option {{ 'active' if min_sources == '3' else '' }}">3+ sources</a>
+</div>
+"""
+
 MAIN_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
@@ -1200,16 +1275,8 @@ MAIN_TEMPLATE = """<!doctype html>
 <a href="{{ recent_url }}" class="segmented-option {{ 'active' if view == 'recent' else '' }}">Most recent</a>
 <a href="{{ covered_url }}" class="segmented-option {{ 'active' if view == 'covered' else '' }}">Most covered</a>
 </div>
+""" + SOURCE_FILTER_HTML + """
 </div>
-{% if show_filter_toggle %}
-<div class="filter-toggle">
-{% if show_all %}
-Showing every story &middot; <a href="{{ toggle_url }}">Show 2+ sources only</a>
-{% else %}
-Showing stories with 2+ sources{% if hidden_count %} &middot; {{ hidden_count }} single-source hidden{% endif %} &middot; <a href="{{ toggle_url }}">Show all</a>
-{% endif %}
-</div>
-{% endif %}
 <div class="legend">
 <span><span class="dot" style="background:var(--trust)"></span>Trusted</span>
 <span><span class="dot" style="background:var(--niche)"></span>Niche</span>
@@ -1266,6 +1333,10 @@ FEED_TEMPLATE = """<!doctype html>
 </body>
 </html>"""
 
+# Calendar template (updated 17 Aug 2026): each entry now merges every
+# platform for the same game+release date into one row (see
+# fetch_calendar_entries), shows a short description pulled directly
+# from IGDB, and links out to the game's real IGDB page using its slug.
 CALENDAR_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
@@ -1296,7 +1367,20 @@ CALENDAR_TEMPLATE = """<!doctype html>
 {% endif %}
 <div class="calendar-entry-body">
 <h3>{{ item.game_name }}</h3>
-<p class="meta">{{ item.platform or "Platform TBD" }}{% if item.opencritic_score %} &middot; <span class="score-chip" style="background:var(--{{ (item.opencritic_tier or 'strong')|lower }}-bg); color:var(--{{ (item.opencritic_tier or 'strong')|lower }}-fg); margin-bottom:0;">{{ item.opencritic_score|round|int }}</span>{% endif %}</p>
+<div class="calendar-platforms">
+{% for p in item.platforms %}
+<span class="platform-chip">{{ p }}</span>
+{% endfor %}
+{% if item.opencritic_score %}
+<span class="score-chip" style="background:var(--{{ (item.opencritic_tier or 'strong')|lower }}-bg); color:var(--{{ (item.opencritic_tier or 'strong')|lower }}-fg); margin-bottom:0;">{{ item.opencritic_score|round|int }}</span>
+{% endif %}
+</div>
+{% if item.summary %}
+<p class="calendar-summary">{{ item.summary|truncate(140) }}</p>
+{% endif %}
+{% if item.game_slug %}
+<a class="calendar-igdb-link" href="https://www.igdb.com/games/{{ item.game_slug }}" target="_blank" rel="noopener">View on IGDB &#8599;</a>
+{% endif %}
 </div>
 </div>
 {% endfor %}
@@ -1503,16 +1587,17 @@ def valid_view():
     return v if v in ("recent", "covered") else "recent"
 
 
-def valid_show_all():
-    return request.args.get("all") == "1"
+def valid_min_sources():
+    v = request.args.get("min_sources", MIN_SOURCES_DEFAULT)
+    return v if v in VALID_MIN_SOURCES else MIN_SOURCES_DEFAULT
 
 
-def build_url(base_path, view="recent", show_all=False):
+def build_url(base_path, view="recent", min_sources=MIN_SOURCES_DEFAULT):
     params = []
     if view == "covered":
         params.append("view=covered")
-    if show_all:
-        params.append("all=1")
+    if min_sources != MIN_SOURCES_DEFAULT:
+        params.append(f"min_sources={min_sources}")
     if not params:
         return base_path
     return base_path + "?" + "&".join(params)
@@ -1581,7 +1666,7 @@ def fetch_rail(kind):
     return items
 
 
-def fetch_stories(tab, view, show_all=False):
+def fetch_stories(tab, view, min_sources=MIN_SOURCES_DEFAULT):
     if tab == "reviews":
         tab_where = "AND s.is_review = TRUE"
     elif tab == "video":
@@ -1592,8 +1677,8 @@ def fetch_stories(tab, view, show_all=False):
     order_by = "n DESC, latest DESC" if view == "covered" else "latest DESC"
 
     coverage_having = ""
-    if tab == "main" and not show_all:
-        coverage_having = f"AND count(*) >= {MIN_SOURCES_DEFAULT}"
+    if tab == "main" and min_sources in ("2", "3"):
+        coverage_having = f"AND count(*) >= {min_sources}"
 
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -1664,29 +1749,12 @@ def fetch_stories(tab, view, show_all=False):
             "ownership_note": compute_ownership_note(sources),
         })
 
-    hidden_count = 0
-    if tab == "main" and not show_all:
-        cur.execute(
-            f"""
-            SELECT count(*) AS n FROM (
-                SELECT s.id
-                FROM stories s
-                JOIN articles a ON a.story_id = s.id
-                WHERE s.is_review = FALSE AND s.is_video = FALSE AND s.dismissed_at IS NULL
-                GROUP BY s.id
-                HAVING max(COALESCE(a.published_at, a.fetched_at)) > now() - interval '{FEED_WINDOW_DAYS} days'
-                AND count(*) < {MIN_SOURCES_DEFAULT}
-            ) hidden
-            """
-        )
-        hidden_count = cur.fetchone()["n"]
-
     cur.execute("SELECT count(DISTINCT source) FROM articles")
     source_count = cur.fetchone()["count"]
 
     cur.close()
     conn.close()
-    return stories, source_count, hidden_count
+    return stories, source_count
 
 
 def fetch_search_results(query):
@@ -1861,20 +1929,38 @@ def fetch_topic_stories(topic_key, view="recent"):
 
 
 def fetch_calendar_entries():
+    """Backs the Calendar tab. Updated 17 Aug 2026 based on real user
+    feedback: merges every platform for the same game+release date into
+    one row (a game releasing on PC/PS5/Xbox previously showed as three
+    separate rows) via array_agg, filters to release_date >= today
+    (previously showed a week of already-passed releases), and now
+    surfaces game_slug/summary for a real IGDB link and short
+    description - both added to the schema/ingestion alongside the
+    null-hype fix on the same day.
+    """
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
         """
-        SELECT gr.game_name, gr.platform, gr.release_date, gr.cover_url,
+        SELECT gr.game_name, gr.release_date,
+               array_agg(DISTINCT gr.platform) FILTER (WHERE gr.platform IS NOT NULL) AS platforms,
+               (array_agg(gr.cover_url) FILTER (WHERE gr.cover_url IS NOT NULL))[1] AS cover_url,
+               (array_agg(gr.game_slug) FILTER (WHERE gr.game_slug IS NOT NULL))[1] AS game_slug,
+               (array_agg(gr.summary) FILTER (WHERE gr.summary IS NOT NULL))[1] AS summary,
                s.opencritic_score, s.opencritic_tier
         FROM game_releases gr
         LEFT JOIN stories s ON s.opencritic_game_name ILIKE gr.game_name
+        WHERE gr.release_date >= CURRENT_DATE
+        GROUP BY gr.game_name, gr.release_date, s.opencritic_score, s.opencritic_tier
         ORDER BY gr.release_date ASC, gr.game_name ASC
         """
     )
     rows = cur.fetchall()
     cur.close()
     conn.close()
+
+    for row in rows:
+        row["platforms"] = [PLATFORM_SHORT_NAMES.get(p, p) for p in (row["platforms"] or [])]
 
     grouped = []
     current_key = None
@@ -1893,8 +1979,8 @@ def fetch_calendar_entries():
 @app.route("/")
 def index():
     view = valid_view()
-    show_all = valid_show_all()
-    stories, source_count, hidden_count = fetch_stories(tab="main", view=view, show_all=show_all)
+    min_sources = valid_min_sources()
+    stories, source_count = fetch_stories(tab="main", view=view, min_sources=min_sources)
 
     show_rails = (view == "recent")
     if show_rails:
@@ -1915,11 +2001,12 @@ def index():
     return render_template_string(
         MAIN_TEMPLATE, stories=stories, source_count=source_count,
         stories_part1=stories_part1, stories_part2=stories_part2, stories_part3=stories_part3,
-        active_tab="main", view=view, show_all=show_all, hidden_count=hidden_count,
-        recent_url=build_url("/", view="recent", show_all=show_all),
-        covered_url=build_url("/", view="covered", show_all=show_all),
-        toggle_url=build_url("/", view=view, show_all=not show_all),
-        show_filter_toggle=True,
+        active_tab="main", view=view, min_sources=min_sources,
+        recent_url=build_url("/", view="recent", min_sources=min_sources),
+        covered_url=build_url("/", view="covered", min_sources=min_sources),
+        min1_url=build_url("/", view=view, min_sources="1"),
+        min2_url=build_url("/", view=view, min_sources="2"),
+        min3_url=build_url("/", view=view, min_sources="3"),
         show_rails=show_rails, trending=trending, review_rail=review_rail, video_rail=video_rail,
         topic_tiles=all_topic_tiles(), active_topic=None,
     )
@@ -1928,7 +2015,7 @@ def index():
 @app.route("/reviews")
 def reviews():
     view = valid_view()
-    stories, source_count, _ = fetch_stories(tab="reviews", view=view)
+    stories, source_count = fetch_stories(tab="reviews", view=view)
     return render_template_string(
         FEED_TEMPLATE, stories=stories, source_count=source_count,
         active_tab="reviews", view=view,
@@ -1941,7 +2028,7 @@ def reviews():
 @app.route("/video")
 def video():
     view = valid_view()
-    stories, source_count, _ = fetch_stories(tab="video", view=view)
+    stories, source_count = fetch_stories(tab="video", view=view)
     return render_template_string(
         FEED_TEMPLATE, stories=stories, source_count=source_count,
         active_tab="video", view=view,
