@@ -13,15 +13,6 @@ UNDO_WINDOW_MS = 5000
 RAIL_LIMIT = 8
 MIN_VOTES_FOR_SENTIMENT = 5
 
-# Source-count filter (added 17 Aug 2026, replacing the old binary
-# "show all / 2+ only" toggle). Default changed from 2 to 1 per the
-# user's own observation from actual daily use: with more sources and
-# topics added since the 2+ default was first chosen, genuinely
-# interesting single-source stories are surfacing regularly, and hiding
-# them by default was costing more than it saved. Kept as three
-# explicit options (1 / 2 / 3+) rather than a slider or free-form
-# number - a small, fixed set of clear choices matches how the rest of
-# this app already presents filters (Most recent/Most covered).
 MIN_SOURCES_DEFAULT = "1"
 VALID_MIN_SOURCES = ("1", "2", "3")
 
@@ -89,12 +80,6 @@ TOPICS = {
     },
 }
 
-# Short platform display names (added 17 Aug 2026, for the merged
-# calendar entries). IGDB's own platform names are often long or
-# formatted for a desktop context ("PC (Microsoft Windows)", "Xbox
-# Series X|S") - a plain unmapped name still displays fine via the
-# fallback below, this just tightens up the common ones so multiple
-# platform chips on one compact calendar row stay glanceable.
 PLATFORM_SHORT_NAMES = {
     "PC (Microsoft Windows)": "PC",
     "Mac": "Mac",
@@ -881,6 +866,12 @@ font-weight: 600;
 text-decoration: underline;
 color: var(--text-secondary);
 }
+.calendar-date-inline {
+font-size: 12px;
+font-weight: 600;
+color: var(--text-secondary);
+margin: 0 0 6px 2px;
+}
 """
 
 CARD_INTERACTIONS_JS = """
@@ -1247,9 +1238,6 @@ STORY_CARD_LOOP_HTML = """
 {% endif %}
 """
 
-# Source-count filter (added 17 Aug 2026), replacing the old "N hidden,
-# Show all" toggle. Three explicit buttons rather than a toggle - see
-# MIN_SOURCES_DEFAULT above for why.
 SOURCE_FILTER_HTML = """
 <div class="source-filter">
 <a href="{{ min1_url }}" class="source-filter-option {{ 'active' if min_sources == '1' else '' }}">1 source</a>
@@ -1333,32 +1321,9 @@ FEED_TEMPLATE = """<!doctype html>
 </body>
 </html>"""
 
-# Calendar template (updated 17 Aug 2026): each entry now merges every
-# platform for the same game+release date into one row (see
-# fetch_calendar_entries), shows a short description pulled directly
-# from IGDB, and links out to the game's real IGDB page using its slug.
-CALENDAR_TEMPLATE = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Calendar - FeedForge</title>
-""" + FAVICON_LINK + """
-<style>""" + CSS + """</style>
-</head>
-<body>
-""" + HEADER_HTML + """
-<div class="sticky-nav">
-""" + TABS_HTML + """
-</div>
-<main style="padding-top:16px;">
-{% if not groups %}
-<p class="meta">No release data yet - check back soon.</p>
-{% endif %}
-{% for group in groups %}
-<div class="calendar-group">
-<p class="section-label">{{ group.label }}</p>
-{% for item in group.entries %}
+# Calendar entry partial, reused between the chronological (grouped by
+# date) and hyped (flat, sorted by anticipation) views added 17 Aug 2026.
+CALENDAR_ENTRY_HTML = """
 <div class="calendar-entry">
 {% if item.cover_url %}
 <img class="calendar-cover" src="{{ item.cover_url }}" loading="lazy" alt="">
@@ -1383,9 +1348,55 @@ CALENDAR_TEMPLATE = """<!doctype html>
 {% endif %}
 </div>
 </div>
+"""
+
+# Calendar template (updated 17 Aug 2026 with a sort toggle): "Chronological"
+# groups by release date as before; "Most anticipated" is a flat list
+# ordered purely by IGDB's own hype signal - grouping that by date
+# wouldn't make sense, since the whole point is comparing games across
+# different dates, not re-sorting within a single day. Each entry shows
+# its own date inline in that view since there's no day header to
+# convey it otherwise.
+CALENDAR_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calendar - FeedForge</title>
+""" + FAVICON_LINK + """
+<style>""" + CSS + """</style>
+</head>
+<body>
+""" + HEADER_HTML + """
+<div class="sticky-nav">
+""" + TABS_HTML + """
+<div class="segmented">
+<a href="{{ chrono_url }}" class="segmented-option {{ 'active' if view == 'chronological' else '' }}">Chronological</a>
+<a href="{{ hyped_url }}" class="segmented-option {{ 'active' if view == 'hyped' else '' }}">Most anticipated</a>
+</div>
+</div>
+<main style="padding-top:16px;">
+{% if view == 'chronological' %}
+{% if not groups %}
+<p class="meta">No release data yet - check back soon.</p>
+{% endif %}
+{% for group in groups %}
+<div class="calendar-group">
+<p class="section-label">{{ group.label }}</p>
+{% for item in group.entries %}
+""" + CALENDAR_ENTRY_HTML + """
 {% endfor %}
 </div>
 {% endfor %}
+{% else %}
+{% if not flat_entries %}
+<p class="meta">No release data yet - check back soon.</p>
+{% endif %}
+{% for item in flat_entries %}
+<p class="calendar-date-inline">{{ item.release_date_label }}</p>
+""" + CALENDAR_ENTRY_HTML + """
+{% endfor %}
+{% endif %}
 </main>
 """ + BACK_TO_TOP_HTML + PULL_TO_REFRESH_HTML + """
 </body>
@@ -1928,31 +1939,34 @@ def fetch_topic_stories(topic_key, view="recent"):
     return stories, source_count
 
 
-def fetch_calendar_entries():
-    """Backs the Calendar tab. Updated 17 Aug 2026 based on real user
-    feedback: merges every platform for the same game+release date into
-    one row (a game releasing on PC/PS5/Xbox previously showed as three
-    separate rows) via array_agg, filters to release_date >= today
-    (previously showed a week of already-passed releases), and now
-    surfaces game_slug/summary for a real IGDB link and short
-    description - both added to the schema/ingestion alongside the
-    null-hype fix on the same day.
+def fetch_calendar_entries(view="chronological"):
+    """Backs the Calendar tab. Two view modes (added 17 Aug 2026):
+    "chronological" (default) groups by release date; "hyped" (Most
+    anticipated) returns a flat list sorted purely by IGDB's own hype
+    signal - grouping that by date wouldn't make sense, since the whole
+    point of that view is comparing games across different dates, not
+    re-sorting within one day. A game's hype is a per-game IGDB value,
+    identical across every platform row for it, so max() during the
+    GROUP BY is just a safe way to pick the one real value rather than
+    implying different platforms have different anticipation levels.
     """
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    order_sql = "hype_val DESC NULLS LAST, gr.release_date ASC" if view == "hyped" else "gr.release_date ASC, gr.game_name ASC"
     cur.execute(
-        """
+        f"""
         SELECT gr.game_name, gr.release_date,
                array_agg(DISTINCT gr.platform) FILTER (WHERE gr.platform IS NOT NULL) AS platforms,
                (array_agg(gr.cover_url) FILTER (WHERE gr.cover_url IS NOT NULL))[1] AS cover_url,
                (array_agg(gr.game_slug) FILTER (WHERE gr.game_slug IS NOT NULL))[1] AS game_slug,
                (array_agg(gr.summary) FILTER (WHERE gr.summary IS NOT NULL))[1] AS summary,
+               max(gr.hype) AS hype_val,
                s.opencritic_score, s.opencritic_tier
         FROM game_releases gr
         LEFT JOIN stories s ON s.opencritic_game_name ILIKE gr.game_name
         WHERE gr.release_date >= CURRENT_DATE
         GROUP BY gr.game_name, gr.release_date, s.opencritic_score, s.opencritic_tier
-        ORDER BY gr.release_date ASC, gr.game_name ASC
+        ORDER BY {order_sql}
         """
     )
     rows = cur.fetchall()
@@ -1961,6 +1975,10 @@ def fetch_calendar_entries():
 
     for row in rows:
         row["platforms"] = [PLATFORM_SHORT_NAMES.get(p, p) for p in (row["platforms"] or [])]
+        row["release_date_label"] = row["release_date"].strftime("%b %-d")
+
+    if view == "hyped":
+        return {"flat": rows, "grouped": None}
 
     grouped = []
     current_key = None
@@ -1973,7 +1991,7 @@ def fetch_calendar_entries():
             grouped.append(current_group)
             current_key = key
         current_group["entries"].append(row)
-    return grouped
+    return {"flat": None, "grouped": grouped}
 
 
 @app.route("/")
@@ -2040,7 +2058,9 @@ def video():
 
 @app.route("/calendar")
 def calendar():
-    groups = fetch_calendar_entries()
+    view = request.args.get("view", "chronological")
+    view = view if view in ("chronological", "hyped") else "chronological"
+    result = fetch_calendar_entries(view)
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor()
     cur.execute("SELECT count(DISTINCT source) FROM articles")
@@ -2048,7 +2068,10 @@ def calendar():
     cur.close()
     conn.close()
     return render_template_string(
-        CALENDAR_TEMPLATE, groups=groups, source_count=source_count, active_tab="calendar",
+        CALENDAR_TEMPLATE,
+        groups=result["grouped"], flat_entries=result["flat"],
+        view=view, source_count=source_count, active_tab="calendar",
+        chrono_url="/calendar?view=chronological", hyped_url="/calendar?view=hyped",
     )
 
 
