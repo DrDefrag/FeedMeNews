@@ -176,6 +176,8 @@ header {
 padding: 20px 16px 12px;
 max-width: 640px;
 margin: 0 auto;
+}
+.header-top-row {
 display: flex;
 justify-content: space-between;
 align-items: flex-start;
@@ -183,12 +185,12 @@ gap: 12px;
 }
 .header-brand {
 display: flex;
-align-items: center;
-gap: 10px;
+align-items: flex-start;
+gap: 12px;
 }
 .logo-icon {
-width: 32px;
-height: 35px;
+width: 44px;
+height: 48px;
 flex-shrink: 0;
 }
 .logo-icon svg {
@@ -197,7 +199,7 @@ height: 100%;
 display: block;
 }
 header h1 {
-font-size: 21px;
+font-size: 22px;
 font-weight: 800;
 letter-spacing: -0.02em;
 margin: 0 0 2px;
@@ -207,7 +209,12 @@ font-size: 12px;
 font-weight: 700;
 font-style: italic;
 color: var(--comm);
-margin: 0 0 3px;
+margin: 0;
+}
+.header-subtitle {
+font-size: 13px;
+color: var(--text-secondary);
+margin: 8px 0 0;
 }
 header p {
 font-size: 13px;
@@ -459,7 +466,7 @@ width: 44px;
 height: 44px;
 border-radius: 50%;
 border: none;
-background: rgba(0,0,0,0.4);
+background: rgba(216, 90, 48, 0.8);
 backdrop-filter: blur(6px);
 -webkit-backdrop-filter: blur(6px);
 color: #fff;
@@ -1173,15 +1180,17 @@ PULL_TO_REFRESH_HTML = """
 
 HEADER_HTML = """
 <header>
+<div class="header-top-row">
 <div class="header-brand">
 <div class="logo-icon">""" + LOGO_ICON + """</div>
 <div>
 <h1>FeedForge</h1>
 <p class="tagline">Curation Done Correctly</p>
-<p>Gaming coverage across {{ source_count }} sources, grouped by story</p>
 </div>
 </div>
 <a href="/search" class="search-icon-btn" aria-label="Search">""" + ICON_SEARCH + """</a>
+</div>
+<p class="header-subtitle">Gaming coverage across {{ source_count }} sources, grouped by story</p>
 </header>
 """
 
@@ -1266,17 +1275,6 @@ REVIEW_RAIL_HTML = """
 {% endif %}
 """
 
-# Desktop sidebar (added 17 Aug 2026): reuses the exact same trending /
-# video_rail / review_rail data as the mobile rails above - no new
-# queries - just a vertical, persistent (sticky) layout instead of a
-# horizontal scroll strip that only appears once between cards. Hidden
-# by default (feed-sidebar has display:none), shown only past the
-# 1040px breakpoint where the mobile-rail versions above get hidden
-# instead. Topics deliberately stays out of this sidebar and remains a
-# horizontal strip at the top on all screen sizes, per the "start
-# safer" scope agreed with the user - the fuller 3-column Ground
-# News-style layout (Topics as a left rail too) is a possible later
-# step, not part of this pass.
 SIDEBAR_RAIL_HTML = """
 <aside class="feed-sidebar">
 {% if trending %}
@@ -1328,7 +1326,7 @@ SIDEBAR_RAIL_HTML = """
 CARD_HTML = """
 <div class="card">
 <button class="discard-btn" data-action="/story/{{ story.id }}/discard" data-id="{{ story.id }}" aria-label="Discard">""" + ICON_X + """</button>
-<a class="card-link with-buttons" href="/story/{{ story.id }}">
+<a class="card-link {{ 'with-buttons' if not story.image_url else '' }}" href="/story/{{ story.id }}">
 {% if story.image_url %}
 <img class="card-image" src="{{ story.image_url }}" loading="lazy" alt="">
 {% endif %}
