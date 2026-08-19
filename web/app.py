@@ -104,7 +104,7 @@ ICON_REFRESH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strok
 ICON_THUMBS_UP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path></svg>'
 ICON_THUMBS_DOWN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3" transform="rotate(180 12 12)"></path></svg>'
 
-LOGO_ICON = """<svg viewBox="0 0 200 220" xmlns="http://www.w3.org/2000/svg">
+LOGO_ICON = """<svg viewBox="0 72 200 148" xmlns="http://www.w3.org/2000/svg">
 <path d="M 15 168 A 85 85 0 0 1 185 168" fill="none" stroke="#1a1a18" stroke-width="13" stroke-linecap="round"/>
 <path d="M 35 168 A 65 65 0 0 1 165 168" fill="none" stroke="#1a1a18" stroke-width="13" stroke-linecap="round"/>
 <path d="M 55 168 A 45 45 0 0 1 145 168" fill="none" stroke="#1a1a18" stroke-width="13" stroke-linecap="round"/>
