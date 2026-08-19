@@ -447,7 +447,7 @@ overflow: hidden;
 .card-image {
 display: block;
 width: calc(100% + 32px);
-height: 160px;
+aspect-ratio: 16 / 9;
 object-fit: cover;
 margin: -16px -16px 12px -16px;
 background: var(--border);
@@ -593,7 +593,7 @@ margin: 0 auto;
 .hero-image {
 display: block;
 width: 100%;
-max-height: 280px;
+aspect-ratio: 16 / 9;
 object-fit: cover;
 border-radius: 14px;
 margin: 4px 0 18px;
