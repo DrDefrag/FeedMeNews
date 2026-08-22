@@ -5,9 +5,21 @@ import feedparser
 import requests
 import xml.etree.ElementTree as ET
 import psycopg2
+import socket
 from datetime import datetime, timezone, timedelta
 from sklearn.feature_extraction.text import TfidfVectorizer, ENGLISH_STOP_WORDS
 from sklearn.metrics.pairwise import cosine_similarity
+
+# Global socket timeout (added 22 Aug 2026) - feedparser.parse() has no
+# per-call timeout parameter of its own, and a single slow/unresponsive
+# feed (confirmed live: the exact source varied between runs - once
+# after DF Clips, once at Bellular News) was silently hanging the whole
+# ingestion process indefinitely, blocking every source and step after
+# it, including the release calendar. This sets a ceiling on any socket
+# operation the process opens, including feedparser's internal fetches,
+# so a slow source times out and gets caught by that source's own
+# try/except instead of stalling everything downstream forever.
+socket.setdefaulttimeout(20)
 
 DB_URL = os.environ["DATABASE_URL"]
 OPENCRITIC_API_KEY = os.environ.get("OPENCRITIC_API_KEY")
