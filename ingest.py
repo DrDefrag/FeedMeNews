@@ -570,6 +570,7 @@ def fetch_upcoming_releases(conn):
             first_release_ts = game.get("first_release_date")
             if first_release_ts and (date_ts - first_release_ts) > 365 * 86400:
                 continue
+            release_date = datetime.fromtimestamp(date_ts, tz=timezone.utc).date()
             platform = (row.get("platform") or {}).get("name")
             cover_url = game.get("cover", {}).get("url") if game.get("cover") else None
             if cover_url:
