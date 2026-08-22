@@ -104,7 +104,7 @@ MAX_OPENCRITIC_LOOKUPS_PER_DAY = 10
 # to 1 day (down from 7) - the web app itself only ever displays
 # release_date >= today, so fetching much further back was pointless
 # stored-but-unused data.
-CALENDAR_WINDOW_DAYS = 60
+CALENDAR_WINDOW_DAYS = 180
 CALENDAR_LOOKBACK_DAYS = 1
 CALENDAR_FETCH_LIMIT = 500
 RELEASE_CALENDAR_INTERVAL_SECONDS = 86400
@@ -537,7 +537,7 @@ def fetch_upcoming_releases(conn):
             "Accept": "application/json",
         },
         data=(
-            "fields game.name, game.cover.url, game.game_type, game.hypes, game.slug, game.summary, platform.name, date;"
+            "fields game.name, game.cover.url, game.game_type, game.hypes, game.slug, game.summary, game.first_release_date, platform.name, date;"
             f" where date > {start_ts} & date < {end_ts} & game.game_type = 0 & game.hypes != null;"
             " sort game.hypes desc; limit " + str(CALENDAR_FETCH_LIMIT) + ";"
         ),
@@ -555,7 +555,9 @@ def fetch_upcoming_releases(conn):
             release_id = row.get("id")
             if not name or not date_ts or not release_id:
                 continue
-            release_date = datetime.fromtimestamp(date_ts, tz=timezone.utc).date()
+            first_release_ts = game.get("first_release_date")
+            if first_release_ts and (date_ts - first_release_ts) > 365 * 86400:
+                continue
             platform = (row.get("platform") or {}).get("name")
             cover_url = game.get("cover", {}).get("url") if game.get("cover") else None
             if cover_url:
