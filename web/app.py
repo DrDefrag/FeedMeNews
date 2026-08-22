@@ -879,7 +879,7 @@ font-weight: 600;
 color: var(--text-secondary);
 margin: 0 0 6px 2px;
 }
-.feed-sidebar {
+.feed-sidebar, .topics-sidebar {
 display: none;
 }
 .sidebar-section {
@@ -933,9 +933,6 @@ border-radius: 20px;
 display: inline-block;
 margin-right: 6px;
 }
-.topics-sidebar {
-display: none;
-}
 .topics-sidebar-title {
 font-size: 15px;
 font-weight: 700;
@@ -960,7 +957,7 @@ max-width: 1120px;
 }
 .feed-layout {
 display: grid;
-grid-template-columns: 190px minmax(0, 1fr) 320px;
+grid-template-columns: 200px minmax(0, 1fr) 320px;
 gap: 28px;
 align-items: start;
 }
@@ -1236,15 +1233,14 @@ TOPICS_RAIL_HTML = """
 </div>
 """
 
-# Desktop-only duplicate of the Topics rail (added 22 Aug 2026, part of
-# the fuller 3-column layout): identical data/links as TOPICS_RAIL_HTML
-# above, just tagged mobile-rail so it hides once the vertical
-# TOPICS_SIDEBAR_HTML below takes over at the 1040px breakpoint. Kept as
-# its own constant, used only in MAIN_TEMPLATE, rather than adding
-# mobile-rail to the shared TOPICS_RAIL_HTML - that constant is also
-# used by FEED_TEMPLATE (Reviews/Video/topic pages), which don't have a
-# sidebar replacement, so hiding it there would leave those pages with
-# no topics navigation at all on desktop.
+# Desktop-only mobile-hidden duplicate of the Topics rail (added 22 Aug
+# 2026), used only in MAIN_TEMPLATE - once the left topics-sidebar
+# exists at desktop widths, Main no longer needs the horizontal strip
+# too. Kept as a SEPARATE constant rather than adding the mobile-rail
+# class to the shared TOPICS_RAIL_HTML above, since that constant is
+# also used by FEED_TEMPLATE (Reviews/Video/topic pages), which don't
+# have a left sidebar built and would lose Topics navigation entirely
+# at desktop width if the shared constant were hidden there too.
 MAIN_TOPICS_RAIL_HTML = """
 <div class="rail-section mobile-rail">
 <div class="rail-header"><span class="rail-title">Topics</span></div>
@@ -1256,6 +1252,11 @@ MAIN_TOPICS_RAIL_HTML = """
 </div>
 """
 
+# Left sidebar version of Topics (added 22 Aug 2026), completing the
+# 3-column desktop layout - Main only, matching where the right
+# sidebar already lives. Reuses the exact same topic_tiles/active_topic
+# variables already passed into the template for the horizontal rail
+# above, so no new route or query logic is needed.
 TOPICS_SIDEBAR_HTML = """
 <aside class="topics-sidebar">
 <p class="topics-sidebar-title">Topics</p>
