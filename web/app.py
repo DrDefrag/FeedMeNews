@@ -933,17 +933,38 @@ border-radius: 20px;
 display: inline-block;
 margin-right: 6px;
 }
+.topics-sidebar {
+display: none;
+}
+.topics-sidebar-title {
+font-size: 15px;
+font-weight: 700;
+margin: 0 0 10px;
+}
+.topics-sidebar-item {
+display: block;
+padding: 10px 12px;
+border-radius: 9px;
+font-size: 14px;
+font-weight: 600;
+color: var(--text);
+margin-bottom: 3px;
+}
+.topics-sidebar-item.active {
+background: var(--text);
+color: var(--bg);
+}
 @media (min-width: 1040px) {
 header, .tabs, .segmented, .source-filter, .legend, main {
-max-width: 1000px;
+max-width: 1120px;
 }
 .feed-layout {
 display: grid;
-grid-template-columns: minmax(0, 1fr) 320px;
-gap: 36px;
+grid-template-columns: 190px minmax(0, 1fr) 320px;
+gap: 28px;
 align-items: start;
 }
-.feed-sidebar {
+.feed-sidebar, .topics-sidebar {
 display: block;
 position: sticky;
 top: 24px;
@@ -1215,6 +1236,35 @@ TOPICS_RAIL_HTML = """
 </div>
 """
 
+# Desktop-only duplicate of the Topics rail (added 22 Aug 2026, part of
+# the fuller 3-column layout): identical data/links as TOPICS_RAIL_HTML
+# above, just tagged mobile-rail so it hides once the vertical
+# TOPICS_SIDEBAR_HTML below takes over at the 1040px breakpoint. Kept as
+# its own constant, used only in MAIN_TEMPLATE, rather than adding
+# mobile-rail to the shared TOPICS_RAIL_HTML - that constant is also
+# used by FEED_TEMPLATE (Reviews/Video/topic pages), which don't have a
+# sidebar replacement, so hiding it there would leave those pages with
+# no topics navigation at all on desktop.
+MAIN_TOPICS_RAIL_HTML = """
+<div class="rail-section mobile-rail">
+<div class="rail-header"><span class="rail-title">Topics</span></div>
+<div class="rail-scroll">
+{% for key, label in topic_tiles %}
+<a class="topic-tile {{ 'active' if key == active_topic else '' }}" href="/topic/{{ key }}">{{ label }}</a>
+{% endfor %}
+</div>
+</div>
+"""
+
+TOPICS_SIDEBAR_HTML = """
+<aside class="topics-sidebar">
+<p class="topics-sidebar-title">Topics</p>
+{% for key, label in topic_tiles %}
+<a class="topics-sidebar-item {{ 'active' if key == active_topic else '' }}" href="/topic/{{ key }}">{{ label }}</a>
+{% endfor %}
+</aside>
+"""
+
 VIDEO_RAIL_HTML = """
 {% if video_rail %}
 <div class="rail-section mobile-rail">
@@ -1398,8 +1448,9 @@ MAIN_TEMPLATE = """<!doctype html>
 </div>
 <main>
 <div class="feed-layout">
+""" + TOPICS_SIDEBAR_HTML + """
 <div class="feed-main">
-""" + TOPICS_RAIL_HTML + VIDEO_RAIL_HTML + """
+""" + MAIN_TOPICS_RAIL_HTML + VIDEO_RAIL_HTML + """
 {% for story in stories_part1 %}""" + CARD_HTML + """{% endfor %}
 """ + TRENDING_RAIL_HTML + """
 {% for story in stories_part2 %}""" + CARD_HTML + """{% endfor %}
