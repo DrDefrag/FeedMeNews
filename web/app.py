@@ -1233,14 +1233,6 @@ TOPICS_RAIL_HTML = """
 </div>
 """
 
-# Desktop-only mobile-hidden duplicate of the Topics rail (added 22 Aug
-# 2026), used only in MAIN_TEMPLATE - once the left topics-sidebar
-# exists at desktop widths, Main no longer needs the horizontal strip
-# too. Kept as a SEPARATE constant rather than adding the mobile-rail
-# class to the shared TOPICS_RAIL_HTML above, since that constant is
-# also used by FEED_TEMPLATE (Reviews/Video/topic pages), which don't
-# have a left sidebar built and would lose Topics navigation entirely
-# at desktop width if the shared constant were hidden there too.
 MAIN_TOPICS_RAIL_HTML = """
 <div class="rail-section mobile-rail">
 <div class="rail-header"><span class="rail-title">Topics</span></div>
@@ -1252,17 +1244,34 @@ MAIN_TOPICS_RAIL_HTML = """
 </div>
 """
 
-# Left sidebar version of Topics (added 22 Aug 2026), completing the
-# 3-column desktop layout - Main only, matching where the right
-# sidebar already lives. Reuses the exact same topic_tiles/active_topic
-# variables already passed into the template for the horizontal rail
-# above, so no new route or query logic is needed.
+# Upcoming-releases teaser for the left sidebar (added 22 Aug 2026) -
+# reuses the exact same .sidebar-item CSS built for the right sidebar's
+# rails, and the same game_releases data the Calendar tab already
+# fetches, just a short chronological LIMIT rather than the full page.
+UPCOMING_RELEASES_SIDEBAR_HTML = """
+{% if upcoming_releases %}
+<div class="sidebar-section" style="margin-top:26px;">
+<div class="sidebar-section-header"><span class="rail-title">Upcoming releases</span><a class="rail-see-all" href="/calendar">See all &rarr;</a></div>
+{% for item in upcoming_releases %}
+<a class="sidebar-item" href="/calendar">
+{% if item.cover_url %}<img class="sidebar-item-image" src="{{ item.cover_url }}" loading="lazy" alt="">{% endif %}
+<div class="sidebar-item-body">
+<p class="sidebar-item-title">{{ item.game_name }}</p>
+<p class="sidebar-item-meta">{{ item.release_date_label }}</p>
+</div>
+</a>
+{% endfor %}
+</div>
+{% endif %}
+"""
+
 TOPICS_SIDEBAR_HTML = """
 <aside class="topics-sidebar">
 <p class="topics-sidebar-title">Topics</p>
 {% for key, label in topic_tiles %}
 <a class="topics-sidebar-item {{ 'active' if key == active_topic else '' }}" href="/topic/{{ key }}">{{ label }}</a>
 {% endfor %}
+""" + UPCOMING_RELEASES_SIDEBAR_HTML + """
 </aside>
 """
 
@@ -1531,6 +1540,14 @@ CALENDAR_ENTRY_HTML = """
 </div>
 """
 
+# Calendar simplified 22 Aug 2026: dropped the Chronological/Most
+# Anticipated toggle entirely. The hype-based ranking never worked
+# well as a genuine "anticipation" signal (IGDB's hypes field reflects
+# a game's overall cumulative popularity, not excitement for a specific
+# new release - old franchises kept crowding out real new titles even
+# after filtering out straightforward re-releases), and simply wasn't
+# worth continuing to fight with. Replaced with a plain chronological
+# list plus a real search box - more reliable, more honestly useful.
 CALENDAR_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
@@ -1544,15 +1561,13 @@ CALENDAR_TEMPLATE = """<!doctype html>
 """ + HEADER_HTML + """
 <div class="sticky-nav">
 """ + TABS_HTML + """
-<div class="segmented">
-<a href="{{ chrono_url }}" class="segmented-option {{ 'active' if view == 'chronological' else '' }}">Chronological</a>
-<a href="{{ hyped_url }}" class="segmented-option {{ 'active' if view == 'hyped' else '' }}">Most anticipated</a>
-</div>
+<form class="search-form" action="/calendar" method="get">
+<input type="text" name="q" value="{{ query }}" placeholder="Search upcoming releases..." class="search-input">
+</form>
 </div>
 <main style="padding-top:16px;">
-{% if view == 'chronological' %}
 {% if not groups %}
-<p class="meta">No release data yet - check back soon.</p>
+<p class="meta">{{ ('No games found matching "' + query + '".') if query else 'No release data yet - check back soon.' }}</p>
 {% endif %}
 {% for group in groups %}
 <div class="calendar-group">
@@ -1562,15 +1577,6 @@ CALENDAR_TEMPLATE = """<!doctype html>
 {% endfor %}
 </div>
 {% endfor %}
-{% else %}
-{% if not flat_entries %}
-<p class="meta">No release data yet - check back soon.</p>
-{% endif %}
-{% for item in flat_entries %}
-<p class="calendar-date-inline">{{ item.release_date_label }}</p>
-""" + CALENDAR_ENTRY_HTML + """
-{% endfor %}
-{% endif %}
 </main>
 """ + BACK_TO_TOP_HTML + PULL_TO_REFRESH_HTML + """
 </body>
@@ -2113,10 +2119,14 @@ def fetch_topic_stories(topic_key, view="recent"):
     return stories, source_count
 
 
-def fetch_calendar_entries(view="chronological"):
+def fetch_calendar_entries(query=""):
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    order_sql = "hype_val DESC NULLS LAST, gr.release_date ASC" if view == "hyped" else "gr.release_date ASC, gr.game_name ASC"
+    where_extra = ""
+    params = []
+    if query:
+        where_extra = "AND gr.game_name ILIKE %s"
+        params.append(f"%{query}%")
     cur.execute(
         f"""
         SELECT gr.game_name, gr.release_date,
@@ -2124,14 +2134,15 @@ def fetch_calendar_entries(view="chronological"):
                (array_agg(gr.cover_url) FILTER (WHERE gr.cover_url IS NOT NULL))[1] AS cover_url,
                (array_agg(gr.game_slug) FILTER (WHERE gr.game_slug IS NOT NULL))[1] AS game_slug,
                (array_agg(gr.summary) FILTER (WHERE gr.summary IS NOT NULL))[1] AS summary,
-               max(gr.hype) AS hype_val,
                s.opencritic_score, s.opencritic_tier
         FROM game_releases gr
         LEFT JOIN stories s ON s.opencritic_game_name ILIKE gr.game_name
         WHERE gr.release_date >= CURRENT_DATE
+        {where_extra}
         GROUP BY gr.game_name, gr.release_date, s.opencritic_score, s.opencritic_tier
-        ORDER BY {order_sql}
-        """
+        ORDER BY gr.release_date ASC, gr.game_name ASC
+        """,
+        params,
     )
     rows = cur.fetchall()
     cur.close()
@@ -2139,10 +2150,6 @@ def fetch_calendar_entries(view="chronological"):
 
     for row in rows:
         row["platforms"] = [PLATFORM_SHORT_NAMES.get(p, p) for p in (row["platforms"] or [])]
-        row["release_date_label"] = row["release_date"].strftime("%b %-d")
-
-    if view == "hyped":
-        return {"flat": rows, "grouped": None}
 
     grouped = []
     current_key = None
@@ -2155,7 +2162,30 @@ def fetch_calendar_entries(view="chronological"):
             grouped.append(current_group)
             current_key = key
         current_group["entries"].append(row)
-    return {"flat": None, "grouped": grouped}
+    return grouped
+
+
+def fetch_upcoming_releases_preview(limit=5):
+    conn = psycopg2.connect(DB_URL)
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(
+        """
+        SELECT gr.game_name, gr.release_date,
+               (array_agg(gr.cover_url) FILTER (WHERE gr.cover_url IS NOT NULL))[1] AS cover_url
+        FROM game_releases gr
+        WHERE gr.release_date >= CURRENT_DATE
+        GROUP BY gr.game_name, gr.release_date
+        ORDER BY gr.release_date ASC, gr.game_name ASC
+        LIMIT %s
+        """,
+        (limit,),
+    )
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    for row in rows:
+        row["release_date_label"] = row["release_date"].strftime("%b %-d")
+    return rows
 
 
 @app.route("/")
@@ -2163,6 +2193,7 @@ def index():
     view = valid_view()
     min_sources = valid_min_sources()
     stories, source_count = fetch_stories(tab="main", view=view, min_sources=min_sources)
+    upcoming_releases = fetch_upcoming_releases_preview()
 
     show_rails = (view == "recent")
     if show_rails:
@@ -2191,6 +2222,7 @@ def index():
         min3_url=build_url("/", view=view, min_sources="3"),
         show_rails=show_rails, trending=trending, review_rail=review_rail, video_rail=video_rail,
         topic_tiles=all_topic_tiles(), active_topic=None,
+        upcoming_releases=upcoming_releases,
     )
 
 
@@ -2222,9 +2254,8 @@ def video():
 
 @app.route("/calendar")
 def calendar():
-    view = request.args.get("view", "chronological")
-    view = view if view in ("chronological", "hyped") else "chronological"
-    result = fetch_calendar_entries(view)
+    query = request.args.get("q", "").strip()
+    groups = fetch_calendar_entries(query=query)
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor()
     cur.execute("SELECT count(DISTINCT source) FROM articles")
@@ -2233,9 +2264,8 @@ def calendar():
     conn.close()
     return render_template_string(
         CALENDAR_TEMPLATE,
-        groups=result["grouped"], flat_entries=result["flat"],
-        view=view, source_count=source_count, active_tab="calendar",
-        chrono_url="/calendar?view=chronological", hyped_url="/calendar?view=hyped",
+        groups=groups, query=query,
+        source_count=source_count, active_tab="calendar",
     )
 
 
