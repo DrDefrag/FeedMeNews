@@ -1084,6 +1084,10 @@ CARD_INTERACTIONS_JS = """
     var card = discardBtn.closest(".card");
     var storyId = discardBtn.getAttribute("data-id");
     fetch(url, { method: "POST" }).then(function (r) {
+      if (r.status === 401) {
+        window.location.href = "/auth/login";
+        return;
+      }
       if (!r.ok) return;
       collapseCard(card);
       var removeTimeout = setTimeout(function () {
@@ -1831,6 +1835,10 @@ def strip_html(text):
     return text
 
 
+def current_user_id():
+    return session.get("user_id")
+
+
 def valid_view():
     v = request.args.get("view", "recent")
     return v if v in ("recent", "covered") else "recent"
@@ -1857,6 +1865,7 @@ def all_topic_tiles():
 
 
 def fetch_rail(kind):
+    user_id = current_user_id()
     if kind == "reviews":
         tab_where = "AND s.is_review = TRUE"
         order_by = "latest DESC"
@@ -1876,13 +1885,15 @@ def fetch_rail(kind):
             max(COALESCE(a.published_at, a.fetched_at)) AS latest
         FROM stories s
         JOIN articles a ON a.story_id = s.id
+        LEFT JOIN user_story_state uss ON uss.story_id = s.id AND uss.user_id = %s
         WHERE 1=1 {tab_where}
-        AND s.dismissed_at IS NULL
+        AND uss.dismissed_at IS NULL
         GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier
         HAVING max(COALESCE(a.published_at, a.fetched_at)) > now() - interval '{FEED_WINDOW_DAYS} days'
         ORDER BY {order_by}
         LIMIT {RAIL_LIMIT}
-        """
+        """,
+        (user_id,),
     )
     rows = cur.fetchall()
 
@@ -1916,6 +1927,7 @@ def fetch_rail(kind):
 
 
 def fetch_stories(tab, view, min_sources=MIN_SOURCES_DEFAULT):
+    user_id = current_user_id()
     if tab == "reviews":
         tab_where = "AND s.is_review = TRUE"
     elif tab == "video":
@@ -1938,7 +1950,7 @@ def fetch_stories(tab, view, min_sources=MIN_SOURCES_DEFAULT):
             s.title,
             s.opencritic_score,
             s.opencritic_tier,
-            s.read_at,
+            uss.read_at AS read_at,
             s.like_count,
             s.dislike_count,
             count(*) AS n,
@@ -1948,14 +1960,16 @@ def fetch_stories(tab, view, min_sources=MIN_SOURCES_DEFAULT):
             max(COALESCE(a.published_at, a.fetched_at)) AS latest
         FROM stories s
         JOIN articles a ON a.story_id = s.id
+        LEFT JOIN user_story_state uss ON uss.story_id = s.id AND uss.user_id = %s
         WHERE 1=1 {tab_where}
-        AND s.dismissed_at IS NULL
-        GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier, s.read_at, s.like_count, s.dislike_count
+        AND uss.dismissed_at IS NULL
+        GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier, uss.read_at, s.like_count, s.dislike_count
         HAVING max(COALESCE(a.published_at, a.fetched_at)) > now() - interval '{FEED_WINDOW_DAYS} days'
         {coverage_having}
-        ORDER BY (s.read_at IS NOT NULL), {order_by}
+        ORDER BY (uss.read_at IS NOT NULL), {order_by}
         LIMIT 30
-        """
+        """,
+        (user_id,),
     )
     story_rows = cur.fetchall()
 
@@ -2008,6 +2022,7 @@ def fetch_stories(tab, view, min_sources=MIN_SOURCES_DEFAULT):
 
 def fetch_search_results(query):
     query = (query or "").strip()
+    user_id = current_user_id()
 
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -2021,7 +2036,7 @@ def fetch_search_results(query):
                 s.title,
                 s.opencritic_score,
                 s.opencritic_tier,
-                s.read_at,
+                uss.read_at AS read_at,
                 s.like_count,
                 s.dislike_count,
                 count(*) AS n,
@@ -2032,13 +2047,14 @@ def fetch_search_results(query):
                 ts_rank(to_tsvector('english', s.title), plainto_tsquery('english', %s)) AS rank
             FROM stories s
             JOIN articles a ON a.story_id = s.id
-            WHERE s.dismissed_at IS NULL
+            LEFT JOIN user_story_state uss ON uss.story_id = s.id AND uss.user_id = %s
+            WHERE uss.dismissed_at IS NULL
             AND to_tsvector('english', s.title) @@ plainto_tsquery('english', %s)
-            GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier, s.read_at, s.like_count, s.dislike_count
-            ORDER BY (s.read_at IS NOT NULL), rank DESC, latest DESC
+            GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier, uss.read_at, s.like_count, s.dislike_count
+            ORDER BY (uss.read_at IS NOT NULL), rank DESC, latest DESC
             LIMIT 40
             """,
-            (query, query),
+            (query, user_id, query),
         )
         story_rows = cur.fetchall()
 
@@ -2093,10 +2109,11 @@ def fetch_topic_stories(topic_key, view="recent"):
     if not topic:
         return [], 0
 
+    user_id = current_user_id()
     order_by = "n DESC, latest DESC" if view == "covered" else "latest DESC"
 
     conditions = []
-    params = []
+    params = [user_id]
     if topic.get("sources"):
         conditions.append("EXISTS (SELECT 1 FROM articles a2 WHERE a2.story_id = s.id AND a2.source = ANY(%s))")
         params.append(topic["sources"])
@@ -2110,7 +2127,7 @@ def fetch_topic_stories(topic_key, view="recent"):
     cur.execute(
         f"""
         SELECT
-            s.id, s.title, s.opencritic_score, s.opencritic_tier, s.read_at,
+            s.id, s.title, s.opencritic_score, s.opencritic_tier, uss.read_at AS read_at,
             s.like_count, s.dislike_count,
             count(*) AS n,
             count(*) FILTER (WHERE a.source_tier = 'trusted') AS trusted_n,
@@ -2119,11 +2136,12 @@ def fetch_topic_stories(topic_key, view="recent"):
             max(COALESCE(a.published_at, a.fetched_at)) AS latest
         FROM stories s
         JOIN articles a ON a.story_id = s.id
-        WHERE s.dismissed_at IS NULL
+        LEFT JOIN user_story_state uss ON uss.story_id = s.id AND uss.user_id = %s
+        WHERE uss.dismissed_at IS NULL
         {topic_where}
-        GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier, s.read_at, s.like_count, s.dislike_count
+        GROUP BY s.id, s.title, s.opencritic_score, s.opencritic_tier, uss.read_at, s.like_count, s.dislike_count
         HAVING max(COALESCE(a.published_at, a.fetched_at)) > now() - interval '{FEED_WINDOW_DAYS} days'
-        ORDER BY (s.read_at IS NOT NULL), {order_by}
+        ORDER BY (uss.read_at IS NOT NULL), {order_by}
         LIMIT 30
         """,
         params,
@@ -2361,7 +2379,13 @@ def themes():
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     cur.execute(
-        "SELECT count(*) AS n FROM stories WHERE read_at IS NOT NULL OR dismissed_at IS NOT NULL"
+        """
+        SELECT count(*) AS n FROM stories s
+        WHERE EXISTS (
+            SELECT 1 FROM user_story_state uss
+            WHERE uss.story_id = s.id AND (uss.read_at IS NOT NULL OR uss.dismissed_at IS NOT NULL)
+        )
+        """
     )
     total = cur.fetchone()["n"]
 
@@ -2379,7 +2403,10 @@ def themes():
             SELECT a.source_tier AS tier, count(DISTINCT s.id) AS n
             FROM stories s
             JOIN articles a ON a.story_id = s.id
-            WHERE s.read_at IS NOT NULL OR s.dismissed_at IS NOT NULL
+            WHERE EXISTS (
+                SELECT 1 FROM user_story_state uss
+                WHERE uss.story_id = s.id AND (uss.read_at IS NOT NULL OR uss.dismissed_at IS NOT NULL)
+            )
             GROUP BY a.source_tier
             ORDER BY n DESC
             """
@@ -2392,8 +2419,11 @@ def themes():
                 count(*) FILTER (WHERE is_review) AS review_n,
                 count(*) FILTER (WHERE is_video) AS video_n,
                 count(*) FILTER (WHERE NOT is_review AND NOT is_video) AS main_n
-            FROM stories
-            WHERE read_at IS NOT NULL OR dismissed_at IS NOT NULL
+            FROM stories s
+            WHERE EXISTS (
+                SELECT 1 FROM user_story_state uss
+                WHERE uss.story_id = s.id AND (uss.read_at IS NOT NULL OR uss.dismissed_at IS NOT NULL)
+            )
             """
         )
         row = cur.fetchone()
@@ -2408,7 +2438,10 @@ def themes():
             SELECT a.source AS source, count(DISTINCT s.id) AS n
             FROM stories s
             JOIN articles a ON a.story_id = s.id
-            WHERE s.read_at IS NOT NULL OR s.dismissed_at IS NOT NULL
+            WHERE EXISTS (
+                SELECT 1 FROM user_story_state uss
+                WHERE uss.story_id = s.id AND (uss.read_at IS NOT NULL OR uss.dismissed_at IS NOT NULL)
+            )
             GROUP BY a.source
             ORDER BY n DESC
             LIMIT 8
@@ -2417,7 +2450,13 @@ def themes():
         top_outlets = [(r["source"], r["n"]) for r in cur.fetchall()]
 
         cur.execute(
-            "SELECT title FROM stories WHERE read_at IS NOT NULL OR dismissed_at IS NOT NULL"
+            """
+            SELECT title FROM stories s
+            WHERE EXISTS (
+                SELECT 1 FROM user_story_state uss
+                WHERE uss.story_id = s.id AND (uss.read_at IS NOT NULL OR uss.dismissed_at IS NOT NULL)
+            )
+            """
         )
         word_counts = {}
         for r in cur.fetchall():
@@ -2443,9 +2482,19 @@ def themes():
 
 @app.route("/story/<int:story_id>/discard", methods=["POST"])
 def discard_story(story_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify(ok=False, error="login_required"), 401
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor()
-    cur.execute("UPDATE stories SET dismissed_at = now() WHERE id = %s", (story_id,))
+    cur.execute(
+        """
+        INSERT INTO user_story_state (user_id, story_id, dismissed_at)
+        VALUES (%s, %s, now())
+        ON CONFLICT (user_id, story_id) DO UPDATE SET dismissed_at = now()
+        """,
+        (user_id, story_id),
+    )
     conn.commit()
     cur.close()
     conn.close()
@@ -2454,9 +2503,19 @@ def discard_story(story_id):
 
 @app.route("/story/<int:story_id>/undiscard", methods=["POST"])
 def undiscard_story(story_id):
+    user_id = current_user_id()
+    if not user_id:
+        return jsonify(ok=False, error="login_required"), 401
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor()
-    cur.execute("UPDATE stories SET dismissed_at = NULL WHERE id = %s", (story_id,))
+    cur.execute(
+        """
+        INSERT INTO user_story_state (user_id, story_id, dismissed_at)
+        VALUES (%s, %s, NULL)
+        ON CONFLICT (user_id, story_id) DO UPDATE SET dismissed_at = NULL
+        """,
+        (user_id, story_id),
+    )
     conn.commit()
     cur.close()
     conn.close()
@@ -2501,11 +2560,17 @@ def story_detail(story_id):
         conn.close()
         return "Story not found", 404
 
-    cur.execute(
-        "UPDATE stories SET read_at = COALESCE(read_at, now()) WHERE id = %s",
-        (story_id,),
-    )
-    conn.commit()
+    user_id = current_user_id()
+    if user_id:
+        cur.execute(
+            """
+            INSERT INTO user_story_state (user_id, story_id, read_at)
+            VALUES (%s, %s, now())
+            ON CONFLICT (user_id, story_id) DO UPDATE SET read_at = COALESCE(user_story_state.read_at, now())
+            """,
+            (user_id, story_id),
+        )
+        conn.commit()
 
     cur.execute(
         """
