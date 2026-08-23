@@ -3,10 +3,24 @@ import re
 import datetime
 import psycopg2
 import psycopg2.extras
-from flask import Flask, render_template_string, request, jsonify
+from flask import Flask, render_template_string, request, jsonify, session, redirect, url_for
+from werkzeug.middleware.proxy_fix import ProxyFix
+from authlib.integrations.flask_client import OAuth
 
 app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+app.secret_key = os.environ["FLASK_SECRET_KEY"]
+
 DB_URL = os.environ["DATABASE_URL"]
+
+oauth = OAuth(app)
+oauth.register(
+    name="google",
+    client_id=os.environ["GOOGLE_CLIENT_ID"],
+    client_secret=os.environ["GOOGLE_CLIENT_SECRET"],
+    server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+    client_kwargs={"scope": "openid email profile"},
+)
 
 FEED_WINDOW_DAYS = 2
 UNDO_WINDOW_MS = 5000
@@ -234,6 +248,41 @@ flex-shrink: 0;
 margin-top: 2px;
 }
 .search-icon-btn svg { width: 17px; height: 17px; }
+.header-actions {
+display: flex;
+align-items: center;
+gap: 8px;
+}
+.auth-signin-btn {
+font-size: 13px;
+font-weight: 600;
+padding: 8px 14px;
+border-radius: 20px;
+background: var(--border);
+color: var(--text);
+white-space: nowrap;
+margin-top: 2px;
+}
+.auth-avatar-btn {
+width: 36px;
+height: 36px;
+border-radius: 50%;
+overflow: hidden;
+display: flex;
+align-items: center;
+justify-content: center;
+background: var(--comm);
+color: #fff;
+font-size: 14px;
+font-weight: 700;
+flex-shrink: 0;
+margin-top: 2px;
+}
+.auth-avatar-btn img {
+width: 100%;
+height: 100%;
+object-fit: cover;
+}
 .search-form {
 padding: 8px 16px 12px;
 max-width: 640px;
@@ -1206,7 +1255,16 @@ HEADER_HTML = """
 <p class="tagline">Curation Done Correctly</p>
 </div>
 </div>
+<div class="header-actions">
+{% if session.user_id %}
+<a href="/auth/logout" class="auth-avatar-btn" aria-label="Sign out" title="{{ session.user_name or 'Signed in' }} - sign out">
+{% if session.user_avatar %}<img src="{{ session.user_avatar }}" alt="">{% else %}<span>{{ (session.user_name or '?')[0]|upper }}</span>{% endif %}
+</a>
+{% else %}
+<a href="/auth/login" class="auth-signin-btn">Sign in</a>
+{% endif %}
 <a href="/search" class="search-icon-btn" aria-label="Search">""" + ICON_SEARCH + """</a>
+</div>
 </div>
 <p class="header-subtitle">Gaming coverage across {{ source_count }} sources, grouped by story</p>
 </header>
@@ -2517,6 +2575,55 @@ def story_detail(story_id):
         niche_n=niche_n,
         community_n=community_n,
     )
+
+
+@app.route("/auth/login")
+def auth_login():
+    redirect_uri = url_for("auth_callback", _external=True)
+    return oauth.google.authorize_redirect(redirect_uri)
+
+
+@app.route("/auth/google/callback")
+def auth_callback():
+    token = oauth.google.authorize_access_token()
+    userinfo = token.get("userinfo") or {}
+    google_sub = userinfo.get("sub")
+    email = userinfo.get("email")
+    name = userinfo.get("name")
+    avatar_url = userinfo.get("picture")
+    if not google_sub or not email:
+        return "Google sign-in failed: missing user info", 400
+
+    conn = psycopg2.connect(DB_URL)
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(
+        """
+        INSERT INTO users (google_sub, email, name, avatar_url, last_login_at)
+        VALUES (%s, %s, %s, %s, now())
+        ON CONFLICT (google_sub) DO UPDATE SET
+            email = EXCLUDED.email,
+            name = EXCLUDED.name,
+            avatar_url = EXCLUDED.avatar_url,
+            last_login_at = now()
+        RETURNING id
+        """,
+        (google_sub, email, name, avatar_url),
+    )
+    user_row = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    session["user_id"] = user_row["id"]
+    session["user_name"] = name
+    session["user_avatar"] = avatar_url
+    return redirect(url_for("index"))
+
+
+@app.route("/auth/logout")
+def auth_logout():
+    session.clear()
+    return redirect(url_for("index"))
 
 
 if __name__ == "__main__":
