@@ -762,6 +762,41 @@ font-size: 13px;
 color: var(--text-secondary);
 font-weight: 600;
 }
+.diet-note {
+font-size: 15px;
+line-height: 1.5;
+color: var(--text);
+background: var(--card);
+border: 1px solid var(--border);
+border-radius: 14px;
+padding: 14px 16px;
+margin-bottom: 10px;
+}
+.diet-compare {
+margin: 4px 0 4px;
+}
+.diet-compare-row {
+display: flex;
+align-items: center;
+gap: 10px;
+margin-bottom: 10px;
+}
+.diet-compare-label {
+font-size: 13px;
+font-weight: 600;
+width: 78px;
+flex-shrink: 0;
+}
+.diet-compare-bar {
+flex: 1;
+margin-bottom: 0;
+}
+.diet-compare-pct {
+font-size: 11.5px;
+color: var(--text-secondary);
+white-space: nowrap;
+flex-shrink: 0;
+}
 .back-to-top {
 position: fixed;
 bottom: 24px;
@@ -1662,9 +1697,40 @@ THEMES_TEMPLATE = """<!doctype html>
 {% if total == 0 %}
 <p class="meta">Nothing to show yet - read or discard a few stories first.</p>
 {% else %}
-<p class="theme-note">Based on {{ total }} stories read or discarded so far.
-This is a single shared profile for now - there's no login yet, so it
-reflects everyone who's used this installation, not a personal account.</p>
+{% if personal %}
+<p class="section-label">Your Media Diet</p>
+{% if personal.read_count == 0 %}
+<p class="diet-note">Read a few stories and check back - your personal breakdown will show up here.</p>
+{% else %}
+<p class="diet-note">{{ personal.ownership_note }}</p>
+<p class="diet-note">{{ personal.blindspot_note }}</p>
+<p class="section-label">Trust-tier diet</p>
+<div class="diet-compare">
+<div class="diet-compare-row">
+<span class="diet-compare-label">You</span>
+<div class="bar diet-compare-bar">
+<div style="flex:{{ personal.tier_pct[0] }};background:var(--trust);"></div>
+<div style="flex:{{ personal.tier_pct[1] }};background:var(--niche);"></div>
+<div style="flex:{{ personal.tier_pct[2] }};background:var(--comm);"></div>
+</div>
+<span class="diet-compare-pct">{{ personal.tier_pct[0] }}/{{ personal.tier_pct[1] }}/{{ personal.tier_pct[2] }}</span>
+</div>
+<div class="diet-compare-row">
+<span class="diet-compare-label">FeedForge</span>
+<div class="bar diet-compare-bar">
+<div style="flex:{{ global_tier_pct[0] }};background:var(--trust);"></div>
+<div style="flex:{{ global_tier_pct[1] }};background:var(--niche);"></div>
+<div style="flex:{{ global_tier_pct[2] }};background:var(--comm);"></div>
+</div>
+<span class="diet-compare-pct">{{ global_tier_pct[0] }}/{{ global_tier_pct[1] }}/{{ global_tier_pct[2] }}</span>
+</div>
+</div>
+{% endif %}
+{% else %}
+<p class="theme-note">Sign in to see your own personal reading breakdown here.</p>
+{% endif %}
+
+<p class="theme-note">Based on {{ total }} stories read or discarded across everyone who's used this installation.</p>
 
 <p class="section-label">By trust tier</p>
 <div class="theme-list">
@@ -1827,6 +1893,40 @@ def compute_sentiment_summary(like_count, dislike_count):
         return None
     pct = round((like_count or 0) / total * 100)
     return f"{pct}% liked this ({total} vote{'s' if total != 1 else ''})"
+
+
+def compute_personal_ownership_note(sources_read):
+    outlet_count = len(sources_read)
+    if outlet_count == 0:
+        return None
+    owners = {SOURCE_OWNERSHIP.get(s, s) for s in sources_read}
+    owner_count = len(owners)
+    if owner_count < outlet_count:
+        return (
+            f"You've read from {outlet_count} outlets - owned by just "
+            f"{owner_count} compan{'y' if owner_count == 1 else 'ies'}."
+        )
+    return f"You've read from {outlet_count} independently-owned outlet{'s' if outlet_count != 1 else ''}."
+
+
+def compute_blindspot_note(blindspot_count):
+    if blindspot_count == 0:
+        return "You haven't caught any blindspot stories yet - ones the mainstream press missed."
+    return (
+        f"You caught {blindspot_count} stor{'y' if blindspot_count == 1 else 'ies'} before "
+        f"the mainstream press covered {'it' if blindspot_count == 1 else 'them'}."
+    )
+
+
+def compute_tier_percentages(tier_counts):
+    total = sum(tier_counts.values())
+    if total == 0:
+        return (0, 0, 0)
+    return (
+        round(tier_counts.get("trusted", 0) / total * 100),
+        round(tier_counts.get("niche", 0) / total * 100),
+        round(tier_counts.get("community", 0) / total * 100),
+    )
 
 
 def strip_html(text):
@@ -2396,6 +2496,7 @@ def themes():
     type_counts = []
     top_outlets = []
     top_words = []
+    global_tier_pct = (0, 0, 0)
 
     if total > 0:
         cur.execute(
@@ -2411,7 +2512,10 @@ def themes():
             ORDER BY n DESC
             """
         )
-        tier_counts = [(r["tier"].capitalize(), r["n"]) for r in cur.fetchall()]
+        tier_rows = cur.fetchall()
+        tier_raw = {r["tier"]: r["n"] for r in tier_rows}
+        global_tier_pct = compute_tier_percentages(tier_raw)
+        tier_counts = [(r["tier"].capitalize(), r["n"]) for r in tier_rows]
 
         cur.execute(
             """
@@ -2466,6 +2570,76 @@ def themes():
                 word_counts[w] = word_counts.get(w, 0) + 1
         top_words = sorted(word_counts.items(), key=lambda x: -x[1])[:14]
 
+    personal = None
+    user_id = current_user_id()
+    if user_id:
+        cur.execute(
+            """
+            SELECT DISTINCT a.source AS source
+            FROM user_story_state uss
+            JOIN articles a ON a.story_id = uss.story_id
+            WHERE uss.user_id = %s AND uss.read_at IS NOT NULL
+            """,
+            (user_id,),
+        )
+        sources_read = [r["source"] for r in cur.fetchall()]
+
+        cur.execute(
+            """
+            SELECT count(*) AS n FROM user_story_state
+            WHERE user_id = %s AND read_at IS NOT NULL
+            """,
+            (user_id,),
+        )
+        read_count = cur.fetchone()["n"]
+
+        personal_tier_pct = (0, 0, 0)
+        blindspot_count = 0
+        ownership_note = None
+        blindspot_note = None
+
+        if read_count > 0:
+            cur.execute(
+                """
+                SELECT a.source_tier AS tier, count(DISTINCT s.id) AS n
+                FROM stories s
+                JOIN articles a ON a.story_id = s.id
+                JOIN user_story_state uss ON uss.story_id = s.id
+                WHERE uss.user_id = %s AND uss.read_at IS NOT NULL
+                GROUP BY a.source_tier
+                """,
+                (user_id,),
+            )
+            personal_tier_raw = {r["tier"]: r["n"] for r in cur.fetchall()}
+            personal_tier_pct = compute_tier_percentages(personal_tier_raw)
+
+            cur.execute(
+                """
+                SELECT count(*) FROM (
+                    SELECT s.id
+                    FROM stories s
+                    JOIN user_story_state uss ON uss.story_id = s.id
+                    JOIN articles a ON a.story_id = s.id
+                    WHERE uss.user_id = %s AND uss.read_at IS NOT NULL
+                    GROUP BY s.id
+                    HAVING count(*) FILTER (WHERE a.source_tier = 'trusted') = 0 AND count(*) >= 2
+                ) blindspots
+                """,
+                (user_id,),
+            )
+            blindspot_count = cur.fetchone()["count"]
+
+            ownership_note = compute_personal_ownership_note(sources_read)
+            blindspot_note = compute_blindspot_note(blindspot_count)
+
+        personal = {
+            "read_count": read_count,
+            "tier_pct": personal_tier_pct,
+            "blindspot_count": blindspot_count,
+            "ownership_note": ownership_note,
+            "blindspot_note": blindspot_note,
+        }
+
     cur.close()
     conn.close()
 
@@ -2477,6 +2651,8 @@ def themes():
         type_counts=type_counts,
         top_outlets=top_outlets,
         top_words=top_words,
+        personal=personal,
+        global_tier_pct=global_tier_pct,
     )
 
 
