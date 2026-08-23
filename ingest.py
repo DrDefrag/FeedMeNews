@@ -177,6 +177,7 @@ def ensure_schema(conn):
         """)
         cur.execute("ALTER TABLE game_releases ADD COLUMN IF NOT EXISTS game_slug TEXT;")
         cur.execute("ALTER TABLE game_releases ADD COLUMN IF NOT EXISTS summary TEXT;")
+        cur.execute("ALTER TABLE game_releases ADD COLUMN IF NOT EXISTS alt_names TEXT[];")
     conn.commit()
 
 
@@ -549,7 +550,7 @@ def fetch_upcoming_releases(conn):
             "Accept": "application/json",
         },
         data=(
-            "fields game.name, game.cover.url, game.game_type, game.hypes, game.slug, game.summary, game.first_release_date, platform.name, date;"
+            "fields game.name, game.cover.url, game.game_type, game.hypes, game.slug, game.summary, game.first_release_date, game.alternative_names.name, platform.name, date;"
             f" where date > {start_ts} & date < {end_ts} & game.game_type = 0 & game.hypes != null;"
             " sort game.hypes desc; limit " + str(CALENDAR_FETCH_LIMIT) + ";"
         ),
@@ -580,10 +581,11 @@ def fetch_upcoming_releases(conn):
             game_slug = game.get("slug")
             summary = game.get("summary")
             hype = game.get("hypes")
+            alt_names = [a.get("name") for a in (game.get("alternative_names") or []) if a.get("name")]
             cur.execute(
                 """
-                INSERT INTO game_releases (igdb_release_id, game_name, platform, release_date, cover_url, game_slug, summary, hype)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                                    INSERT INTO game_releases (igdb_release_id, game_name, platform, release_date, cover_url, game_slug, summary, hype, alt_names)
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (igdb_release_id) DO UPDATE SET
                     game_name = EXCLUDED.game_name,
                     platform = EXCLUDED.platform,
@@ -592,9 +594,10 @@ def fetch_upcoming_releases(conn):
                     game_slug = EXCLUDED.game_slug,
                     summary = EXCLUDED.summary,
                     hype = EXCLUDED.hype,
+                alt_names = EXCLUDED.alt_names,
                     fetched_at = now()
                 """,
-                (release_id, name, platform, release_date, cover_url, game_slug, summary, hype),
+                                (release_id, name, platform, release_date, cover_url, game_slug, summary, hype, alt_names),
             )
             upserted += 1
     conn.commit()
