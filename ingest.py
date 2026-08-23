@@ -178,8 +178,18 @@ def ensure_schema(conn):
         cur.execute("ALTER TABLE game_releases ADD COLUMN IF NOT EXISTS game_slug TEXT;")
         cur.execute("ALTER TABLE game_releases ADD COLUMN IF NOT EXISTS summary TEXT;")
         cur.execute("ALTER TABLE game_releases ADD COLUMN IF NOT EXISTS alt_names TEXT[];")
-    conn.commit()
-
+cur.execute("""
+                CREATE TABLE IF NOT EXISTS users 
+                    id SERIAL PRIMARY KEY,
+                    google_sub TEXT UNIQUE NOT NULL,
+                    email TEXT NOT NULL,
+                    name TEXT,
+                    avatar_url TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    last_login_at TIMESTAMPTZ
+                );
+            """)
+        conn.commit()
 
 def extract_image_url(entry):
     if getattr(entry, "media_thumbnail", None):
