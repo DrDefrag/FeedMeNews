@@ -189,6 +189,17 @@ def ensure_schema(conn):
                     last_login_at TIMESTAMPTZ
                 );
             """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_story_state (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                story_id INTEGER NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+                read_at TIMESTAMPTZ,
+                dismissed_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                UNIQUE (user_id, story_id)
+            );
+            """)
     conn.commit()
 
 def extract_image_url(entry):
@@ -594,8 +605,8 @@ def fetch_upcoming_releases(conn):
             alt_names = [a.get("name") for a in (game.get("alternative_names") or []) if a.get("name")]
             cur.execute(
                 """
-                                    INSERT INTO game_releases (igdb_release_id, game_name, platform, release_date, cover_url, game_slug, summary, hype, alt_names)
-                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO game_releases (igdb_release_id, game_name, platform, release_date, cover_url, game_slug, summary, hype, alt_names)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (igdb_release_id) DO UPDATE SET
                     game_name = EXCLUDED.game_name,
                     platform = EXCLUDED.platform,
@@ -604,10 +615,10 @@ def fetch_upcoming_releases(conn):
                     game_slug = EXCLUDED.game_slug,
                     summary = EXCLUDED.summary,
                     hype = EXCLUDED.hype,
-                alt_names = EXCLUDED.alt_names,
+                    alt_names = EXCLUDED.alt_names,
                     fetched_at = now()
                 """,
-                                (release_id, name, platform, release_date, cover_url, game_slug, summary, hype, alt_names),
+                (release_id, name, platform, release_date, cover_url, game_slug, summary, hype, alt_names),
             )
             upserted += 1
     conn.commit()
