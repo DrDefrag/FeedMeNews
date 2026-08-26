@@ -85,6 +85,20 @@ REDDIT_REQUEST_DELAY_SECONDS = 15
 
 CLUSTER_WINDOW_DAYS = 4
 CLUSTER_SIMILARITY_THRESHOLD = 0.4
+# Hard ceiling on how many articles a single story can absorb (added 26 Aug
+# 2026, after a real production incident: two stories drifted to 712 and
+# 186 articles each, pulled in from 26 and 16 completely unrelated outlets
+# respectively. Root cause is inherent to transitive union-find clustering
+# with no size limit - each new ingestion cycle only needs to match ONE
+# existing member of an already-large cluster to get absorbed into it, so
+# a slightly-too-permissive similarity match can let a story snowball
+# across many cycles into an unbounded blob. This never happens to a
+# genuinely single, broadly-covered story - even the biggest crossover
+# announcements land well under 30 articles across every source this
+# install tracks. Once a candidate story is at or above this cap, new
+# matching articles get their own fresh story instead of joining it,
+# rather than being silently dropped.
+MAX_STORY_SIZE = 30
 
 EXTRA_STOPWORDS = {
     "official", "release", "date", "trailer", "reveal", "gameplay",
@@ -361,9 +375,15 @@ def cluster_recent_articles(conn):
 
     for members in groups.values():
         known_ids = {existing_story_ids[i] for i in members if existing_story_ids[i] is not None}
+        canonical_story_id = None
         if known_ids:
-            canonical_story_id = min(known_ids)
-        else:
+            with conn.cursor() as cur:
+                for sid in sorted(known_ids):
+                    cur.execute("SELECT count(*) FROM articles WHERE story_id = %s", (sid,))
+                    if cur.fetchone()[0] < MAX_STORY_SIZE:
+                        canonical_story_id = sid
+                        break
+        if canonical_story_id is None:
             with conn.cursor() as cur:
                 cur.execute(
                     "INSERT INTO stories (title) VALUES (%s) RETURNING id",
