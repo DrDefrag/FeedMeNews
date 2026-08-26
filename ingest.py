@@ -383,7 +383,24 @@ def cluster_recent_articles(conn):
                     if cur.fetchone()[0] < MAX_STORY_SIZE:
                         canonical_story_id = sid
                         break
+
+        # Fix (23 Aug 2026): the check above only throttles growth INTO an
+        # already-existing story across multiple runs. It does nothing to
+        # stop a single pass's own transitive union-find grouping from
+        # forming one giant BRAND NEW cluster in one shot - loosely-similar
+        # titles can chain together (A~B, B~C, C~D...) until dozens of
+        # genuinely unrelated articles land in the same group, all with no
+        # existing story_id yet, so the size check above never even runs.
+        # Confirmed live: story 322 reached 700+ articles across 26
+        # unrelated outlets, and story 4278 reached 228, entirely through
+        # this gap. Capping the member list before creating a new story
+        # closes it; anything past the cap is left unclustered (story_id
+        # stays NULL) rather than force-split arbitrarily, so it's simply
+        # invisible this cycle and gets a fair, fresh reconsideration next
+        # run once the window has moved and unrelated titles have diluted
+        # the false similarity chain.
         if canonical_story_id is None:
+            members = members[:MAX_STORY_SIZE]
             with conn.cursor() as cur:
                 cur.execute(
                     "INSERT INTO stories (title) VALUES (%s) RETURNING id",
