@@ -94,22 +94,9 @@ TOPICS = {
     },
 }
 
-PLATFORM_SHORT_NAMES = {
-    "PC (Microsoft Windows)": "PC",
-    "Mac": "Mac",
-    "Linux": "Linux",
-    "PlayStation 5": "PS5",
-    "PlayStation 4": "PS4",
-    "Xbox Series X|S": "Xbox Series X|S",
-    "Xbox One": "Xbox One",
-    "Nintendo Switch": "Switch",
-    "Nintendo Switch 2": "Switch 2",
-}
-
 ICON_MAIN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><line x1="7" y1="9" x2="17" y2="9"></line><line x1="7" y1="13" x2="17" y2="13"></line><line x1="7" y1="17" x2="13" y2="17"></line></svg>'
 ICON_REVIEWS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15 9 22 9.5 17 14.5 18.5 22 12 18 5.5 22 7 14.5 2 9.5 9 9"></polygon></svg>'
 ICON_VIDEO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><polygon points="10 8 16 12 10 16" fill="currentColor" stroke="none"></polygon></svg>'
-ICON_CALENDAR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>'
 ICON_THEMES = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2l1.8 6.2L20 10l-6.2 1.8L12 18l-1.8-6.2L4 10l6.2-1.8z"></path></svg>'
 ICON_X = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"></line><line x1="18" y1="6" x2="6" y2="18"></line></svg>'
 ICON_UP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="6 11 12 5 18 11"></polyline></svg>'
@@ -898,71 +885,6 @@ color: var(--text-secondary);
 background: var(--text);
 color: var(--bg);
 }
-.calendar-group {
-margin-bottom: 20px;
-}
-.calendar-entry {
-display: flex;
-gap: 12px;
-background: var(--card);
-border: 1px solid var(--border);
-border-radius: 14px;
-padding: 12px;
-margin-bottom: 10px;
-}
-.calendar-cover {
-width: 64px;
-height: 85px;
-border-radius: 8px;
-object-fit: cover;
-background: var(--border);
-flex-shrink: 0;
-}
-.calendar-cover-placeholder {
-width: 64px;
-height: 85px;
-border-radius: 8px;
-background: var(--border);
-flex-shrink: 0;
-}
-.calendar-entry-body h3 {
-font-size: 15px;
-font-weight: 600;
-margin: 0 0 4px;
-line-height: 1.35;
-}
-.calendar-platforms {
-display: flex;
-flex-wrap: wrap;
-gap: 5px;
-margin: 4px 0 6px;
-}
-.platform-chip {
-font-size: 11px;
-font-weight: 600;
-padding: 2px 8px;
-border-radius: 20px;
-background: var(--border);
-color: var(--text-secondary);
-}
-.calendar-summary {
-font-size: 12.5px;
-color: var(--text-secondary);
-line-height: 1.4;
-margin: 4px 0 6px;
-}
-.calendar-igdb-link {
-font-size: 12px;
-font-weight: 600;
-text-decoration: underline;
-color: var(--text-secondary);
-}
-.calendar-date-inline {
-font-size: 12px;
-font-weight: 600;
-color: var(--text-secondary);
-margin: 0 0 6px 2px;
-}
 .feed-sidebar, .topics-sidebar {
 display: none;
 }
@@ -1314,7 +1236,6 @@ TABS_HTML = """
 <a href="/" class="tab {{ 'active' if active_tab == 'main' else '' }}">""" + ICON_MAIN + """ Main</a>
 <a href="/reviews" class="tab {{ 'active' if active_tab == 'reviews' else '' }}">""" + ICON_REVIEWS + """ Reviews</a>
 <a href="/video" class="tab {{ 'active' if active_tab == 'video' else '' }}">""" + ICON_VIDEO + """ Video</a>
-<a href="/calendar" class="tab {{ 'active' if active_tab == 'calendar' else '' }}">""" + ICON_CALENDAR + """ Calendar</a>
 <a href="/themes" class="tab {{ 'active' if active_tab == 'themes' else '' }}">""" + ICON_THEMES + """ Themes</a>
 </div>
 """
@@ -1341,34 +1262,12 @@ MAIN_TOPICS_RAIL_HTML = """
 </div>
 """
 
-# Upcoming-releases teaser for the left sidebar (added 22 Aug 2026) -
-# reuses the exact same .sidebar-item CSS built for the right sidebar's
-# rails, and the same game_releases data the Calendar tab already
-# fetches, just a short chronological LIMIT rather than the full page.
-UPCOMING_RELEASES_SIDEBAR_HTML = """
-{% if upcoming_releases %}
-<div class="sidebar-section" style="margin-top:26px;">
-<div class="sidebar-section-header"><span class="rail-title">Upcoming releases</span><a class="rail-see-all" href="/calendar">See all &rarr;</a></div>
-{% for item in upcoming_releases %}
-<a class="sidebar-item" href="/calendar">
-{% if item.cover_url %}<img class="sidebar-item-image" src="{{ item.cover_url }}" loading="lazy" alt="">{% endif %}
-<div class="sidebar-item-body">
-<p class="sidebar-item-title">{{ item.game_name }}</p>
-<p class="sidebar-item-meta">{{ item.release_date_label }}</p>
-</div>
-</a>
-{% endfor %}
-</div>
-{% endif %}
-"""
-
 TOPICS_SIDEBAR_HTML = """
 <aside class="topics-sidebar">
 <p class="topics-sidebar-title">Topics</p>
 {% for key, label in topic_tiles %}
 <a class="topics-sidebar-item {{ 'active' if key == active_topic else '' }}" href="/topic/{{ key }}">{{ label }}</a>
 {% endfor %}
-""" + UPCOMING_RELEASES_SIDEBAR_HTML + """
 </aside>
 """
 
@@ -1607,75 +1506,6 @@ FEED_TEMPLATE = """<!doctype html>
 """ + STORY_CARD_LOOP_HTML + """
 </main>
 """ + CARD_INTERACTIONS_JS + VOTE_INTERACTIONS_JS + BACK_TO_TOP_HTML + PULL_TO_REFRESH_HTML + """
-</body>
-</html>"""
-
-CALENDAR_ENTRY_HTML = """
-<div class="calendar-entry">
-{% if item.cover_url %}
-<img class="calendar-cover" src="{{ item.cover_url }}" loading="lazy" alt="">
-{% else %}
-<div class="calendar-cover-placeholder"></div>
-{% endif %}
-<div class="calendar-entry-body">
-<h3>{{ item.game_name }}</h3>
-<div class="calendar-platforms">
-{% for p in item.platforms %}
-<span class="platform-chip">{{ p }}</span>
-{% endfor %}
-{% if item.opencritic_score %}
-<span class="score-chip" style="background:var(--{{ (item.opencritic_tier or 'strong')|lower }}-bg); color:var(--{{ (item.opencritic_tier or 'strong')|lower }}-fg); margin-bottom:0;">{{ item.opencritic_score|round|int }}</span>
-{% endif %}
-</div>
-{% if item.summary %}
-<p class="calendar-summary">{{ item.summary|truncate(140) }}</p>
-{% endif %}
-{% if item.game_slug %}
-<a class="calendar-igdb-link" href="https://www.igdb.com/games/{{ item.game_slug }}" target="_blank" rel="noopener">View on IGDB &#8599;</a>
-{% endif %}
-</div>
-</div>
-"""
-
-# Calendar simplified 22 Aug 2026: dropped the Chronological/Most
-# Anticipated toggle entirely. The hype-based ranking never worked
-# well as a genuine "anticipation" signal (IGDB's hypes field reflects
-# a game's overall cumulative popularity, not excitement for a specific
-# new release - old franchises kept crowding out real new titles even
-# after filtering out straightforward re-releases), and simply wasn't
-# worth continuing to fight with. Replaced with a plain chronological
-# list plus a real search box - more reliable, more honestly useful.
-CALENDAR_TEMPLATE = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Calendar - FeedForge</title>
-""" + FAVICON_LINK + """
-<style>""" + CSS + """</style>
-</head>
-<body>
-""" + HEADER_HTML + """
-<div class="sticky-nav">
-""" + TABS_HTML + """
-<form class="search-form" action="/calendar" method="get">
-<input type="text" name="q" value="{{ query }}" placeholder="Search upcoming releases..." class="search-input">
-</form>
-</div>
-<main style="padding-top:16px;">
-{% if not groups %}
-<p class="meta">{{ ('No games found matching "' + query + '".') if query else 'No release data yet - check back soon.' }}</p>
-{% endif %}
-{% for group in groups %}
-<div class="calendar-group">
-<p class="section-label">{{ group.label }}</p>
-{% for item in group.entries %}
-""" + CALENDAR_ENTRY_HTML + """
-{% endfor %}
-</div>
-{% endfor %}
-</main>
-""" + BACK_TO_TOP_HTML + PULL_TO_REFRESH_HTML + """
 </body>
 </html>"""
 
@@ -2295,81 +2125,11 @@ def fetch_topic_stories(topic_key, view="recent"):
     return stories, source_count
 
 
-def fetch_calendar_entries(query=""):
-    conn = psycopg2.connect(DB_URL)
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    where_extra = ""
-    params = []
-    if query:
-        where_extra = "AND gr.game_name ILIKE %s"
-        params.append(f"%{query}%")
-    cur.execute(
-        f"""
-        SELECT gr.game_name, gr.release_date,
-               array_agg(DISTINCT gr.platform) FILTER (WHERE gr.platform IS NOT NULL) AS platforms,
-               (array_agg(gr.cover_url) FILTER (WHERE gr.cover_url IS NOT NULL))[1] AS cover_url,
-               (array_agg(gr.game_slug) FILTER (WHERE gr.game_slug IS NOT NULL))[1] AS game_slug,
-               (array_agg(gr.summary) FILTER (WHERE gr.summary IS NOT NULL))[1] AS summary,
-               s.opencritic_score, s.opencritic_tier
-        FROM game_releases gr
-        LEFT JOIN stories s ON s.opencritic_game_name ILIKE gr.game_name
-        WHERE gr.release_date >= CURRENT_DATE
-        {where_extra}
-        GROUP BY gr.game_name, gr.release_date, s.opencritic_score, s.opencritic_tier
-        ORDER BY gr.release_date ASC, gr.game_name ASC
-        """,
-        params,
-    )
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-
-    for row in rows:
-        row["platforms"] = [PLATFORM_SHORT_NAMES.get(p, p) for p in (row["platforms"] or [])]
-
-    grouped = []
-    current_key = None
-    current_group = None
-    for row in rows:
-        key = row["release_date"]
-        if current_group is None or key != current_key:
-            label = key.strftime("%A, %B %-d")
-            current_group = {"label": label, "entries": []}
-            grouped.append(current_group)
-            current_key = key
-        current_group["entries"].append(row)
-    return grouped
-
-
-def fetch_upcoming_releases_preview(limit=5):
-    conn = psycopg2.connect(DB_URL)
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute(
-        """
-        SELECT gr.game_name, gr.release_date,
-               (array_agg(gr.cover_url) FILTER (WHERE gr.cover_url IS NOT NULL))[1] AS cover_url
-        FROM game_releases gr
-        WHERE gr.release_date >= CURRENT_DATE
-        GROUP BY gr.game_name, gr.release_date
-        ORDER BY gr.release_date ASC, gr.game_name ASC
-        LIMIT %s
-        """,
-        (limit,),
-    )
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    for row in rows:
-        row["release_date_label"] = row["release_date"].strftime("%b %-d")
-    return rows
-
-
 @app.route("/")
 def index():
     view = valid_view()
     min_sources = valid_min_sources()
     stories, source_count = fetch_stories(tab="main", view=view, min_sources=min_sources)
-    upcoming_releases = fetch_upcoming_releases_preview()
 
     show_rails = (view == "recent")
     if show_rails:
@@ -2398,7 +2158,6 @@ def index():
         min3_url=build_url("/", view=view, min_sources="3"),
         show_rails=show_rails, trending=trending, review_rail=review_rail, video_rail=video_rail,
         topic_tiles=all_topic_tiles(), active_topic=None,
-        upcoming_releases=upcoming_releases,
     )
 
 
@@ -2425,23 +2184,6 @@ def video():
         recent_url=build_url("/video", view="recent"),
         covered_url=build_url("/video", view="covered"),
         topic_tiles=all_topic_tiles(), active_topic=None, topic_label=None,
-    )
-
-
-@app.route("/calendar")
-def calendar():
-    query = request.args.get("q", "").strip()
-    groups = fetch_calendar_entries(query=query)
-    conn = psycopg2.connect(DB_URL)
-    cur = conn.cursor()
-    cur.execute("SELECT count(DISTINCT source) FROM articles")
-    source_count = cur.fetchone()[0]
-    cur.close()
-    conn.close()
-    return render_template_string(
-        CALENDAR_TEMPLATE,
-        groups=groups, query=query,
-        source_count=source_count, active_tab="calendar",
     )
 
 
