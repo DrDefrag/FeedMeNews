@@ -15,7 +15,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 # feed (confirmed live: the exact source varied between runs - once
 # after DF Clips, once at Bellular News) was silently hanging the whole
 # ingestion process indefinitely, blocking every source and step after
-# it, including the release calendar. This sets a ceiling on any socket
+# it, including everything scheduled after. This sets a ceiling on any socket
 # operation the process opens, including feedparser's internal fetches,
 # so a slow source times out and gets caught by that source's own
 # try/except instead of stalling everything downstream forever.
@@ -24,17 +24,6 @@ socket.setdefaulttimeout(20)
 DB_URL = os.environ["DATABASE_URL"]
 OPENCRITIC_API_KEY = os.environ.get("OPENCRITIC_API_KEY")
 OPENCRITIC_HOST = "opencritic-api.p.rapidapi.com"
-
-# IGDB credentials (added 16 Aug 2026, for the release calendar - see
-# fetch_upcoming_releases below). Free for non-commercial use under the
-# Twitch Developer Services Agreement - verified live before building
-# anything, same discipline as OpenCritic and every source above.
-# Requires a Twitch account with 2FA enabled and an app registered at
-# dev.twitch.tv/console (Client Type: Confidential). Rate limit is a
-# generous 4 requests/second - nowhere near a constraint for a feature
-# that only needs to refresh once a day.
-IGDB_CLIENT_ID = os.environ.get("IGDB_CLIENT_ID")
-IGDB_CLIENT_SECRET = os.environ.get("IGDB_CLIENT_SECRET")
 
 RSS_SOURCES = [
     {"name": "IGN", "tier": "trusted", "url": "https://www.ign.com/rss/articles/feed?tags=games"},
@@ -114,28 +103,6 @@ WALKTHROUGH_PATTERN = re.compile(
 
 REVIEW_SCORE_INTERVAL_SECONDS = 3600
 MAX_OPENCRITIC_LOOKUPS_PER_DAY = 10
-
-# Release calendar (added 16 Aug 2026, fixed same day). Real bug found
-# live on 17 Aug 2026: sorting by game.hypes desc to prioritize the
-# fetch budget seemed sound, but IGDB places NULL hype values *first*
-# in a descending sort rather than last - verified directly: our top
-# 500 had a minimum hype of 0 with 267 null-hype entries consuming the
-# budget, while genuinely anticipated titles (Mortal Shell II, hype 80;
-# "Control Resonant", hype 201) were sitting excluded past the cutoff.
-# Fixed by excluding untracked-hype entries entirely via
-# game.hypes != null in the where clause, so the budget is spent purely
-# on games IGDB has real anticipation data for. Also added game.slug and
-# game.summary so the web app can link to the game's real IGDB page and
-# show a short description without a second API call. Lookback trimmed
-# to 1 day (down from 7) - the web app itself only ever displays
-# release_date >= today, so fetching much further back was pointless
-# stored-but-unused data.
-CALENDAR_WINDOW_DAYS = 180
-CALENDAR_LOOKBACK_DAYS = 1
-CALENDAR_FETCH_LIMIT = 500
-RELEASE_CALENDAR_INTERVAL_SECONDS = 86400
-
-_igdb_token_cache = {"access_token": None, "expires_at": 0}
 
 
 def ensure_schema(conn):
@@ -376,31 +343,49 @@ def cluster_recent_articles(conn):
     for members in groups.values():
         known_ids = {existing_story_ids[i] for i in members if existing_story_ids[i] is not None}
         canonical_story_id = None
+        existing_count = 0
         if known_ids:
             with conn.cursor() as cur:
                 for sid in sorted(known_ids):
                     cur.execute("SELECT count(*) FROM articles WHERE story_id = %s", (sid,))
-                    if cur.fetchone()[0] < MAX_STORY_SIZE:
+                    count = cur.fetchone()[0]
+                    if count < MAX_STORY_SIZE:
                         canonical_story_id = sid
+                        existing_count = count
                         break
 
-        # Fix (23 Aug 2026): the check above only throttles growth INTO an
-        # already-existing story across multiple runs. It does nothing to
-        # stop a single pass's own transitive union-find grouping from
-        # forming one giant BRAND NEW cluster in one shot - loosely-similar
-        # titles can chain together (A~B, B~C, C~D...) until dozens of
-        # genuinely unrelated articles land in the same group, all with no
-        # existing story_id yet, so the size check above never even runs.
-        # Confirmed live: story 322 reached 700+ articles across 26
-        # unrelated outlets, and story 4278 reached 228, entirely through
-        # this gap. Capping the member list before creating a new story
-        # closes it; anything past the cap is left unclustered (story_id
-        # stays NULL) rather than force-split arbitrarily, so it's simply
-        # invisible this cycle and gets a fair, fresh reconsideration next
-        # run once the window has moved and unrelated titles have diluted
-        # the false similarity chain.
+        # Fix (23 Aug 2026, extended 18 Sep 2026): the size check above
+        # only throttles growth INTO an already-existing story across
+        # multiple runs. Two real incidents have now exploited two
+        # different gaps in that:
+        #  1. A single pass's own transitive union-find grouping could
+        #     form one giant BRAND NEW cluster in one shot - loosely-
+        #     similar titles chain together (A~B, B~C, C~D...) until
+        #     dozens of unrelated articles land in one group, all with
+        #     no existing story_id yet, so the size check never runs.
+        #     (story 322 reached 700+ articles, story 4278 reached 228.)
+        #  2. Even after capping brand-new stories, reusing an EXISTING
+        #     under-cap story had no cap of its own on the incoming
+        #     group's size - if even one member of a 56-person group
+        #     matched a story that currently held, say, 12 articles,
+        #     all 56 got attached in one shot, sailing straight past 30.
+        #     (confirmed live 18 Sep 2026: two stories reached 56 and 36
+        #     members this way, after a 3-day ingestion outage let a
+        #     large backlog form in a single catch-up run.)
+        # The fix for both is the same: cap how many members from THIS
+        # group can be attached to the chosen target - the full 30 for a
+        # brand-new story, or whatever room remains for an existing one -
+        # regardless of which branch is taken. Anything past the cap is
+        # left unclustered (story_id stays NULL) rather than force-split
+        # arbitrarily, so it's simply invisible this cycle and gets a
+        # fair, fresh reconsideration next run once the window has moved
+        # and unrelated titles have diluted the false similarity chain.
+        room = MAX_STORY_SIZE - existing_count
+        members = members[:room] if room > 0 else []
+        if not members:
+            continue
+
         if canonical_story_id is None:
-            members = members[:MAX_STORY_SIZE]
             with conn.cursor() as cur:
                 cur.execute(
                     "INSERT INTO stories (title) VALUES (%s) RETURNING id",
@@ -569,104 +554,10 @@ def enrich_review_scores(conn):
         time.sleep(REQUEST_DELAY_SECONDS)
 
 
-def get_igdb_token():
-    now = time.time()
-    if _igdb_token_cache["access_token"] and now < _igdb_token_cache["expires_at"] - 60:
-        return _igdb_token_cache["access_token"]
-
-    resp = requests.post(
-        "https://id.twitch.tv/oauth2/token",
-        params={
-            "client_id": IGDB_CLIENT_ID,
-            "client_secret": IGDB_CLIENT_SECRET,
-            "grant_type": "client_credentials",
-        },
-        timeout=15,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    _igdb_token_cache["access_token"] = data["access_token"]
-    _igdb_token_cache["expires_at"] = now + data["expires_in"]
-    return _igdb_token_cache["access_token"]
-
-
-def fetch_upcoming_releases(conn):
-    if not IGDB_CLIENT_ID or not IGDB_CLIENT_SECRET:
-        print("[skip] IGDB_CLIENT_ID/IGDB_CLIENT_SECRET not set, skipping release calendar")
-        return
-
-    token = get_igdb_token()
-    now_ts = int(time.time())
-    start_ts = now_ts - CALENDAR_LOOKBACK_DAYS * 86400
-    end_ts = now_ts + CALENDAR_WINDOW_DAYS * 86400
-
-    resp = requests.post(
-        "https://api.igdb.com/v4/release_dates",
-        headers={
-            "Client-ID": IGDB_CLIENT_ID,
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-        },
-        data=(
-            "fields game.name, game.cover.url, game.game_type, game.hypes, game.slug, game.summary, game.first_release_date, game.alternative_names.name, platform.name, date;"
-            f" where date > {start_ts} & date < {end_ts} & game.game_type = 0 & game.hypes != null;"
-            " sort game.hypes desc; limit " + str(CALENDAR_FETCH_LIMIT) + ";"
-        ),
-        timeout=20,
-    )
-    resp.raise_for_status()
-    rows = resp.json()
-
-    upserted = 0
-    with conn.cursor() as cur:
-        for row in rows:
-            game = row.get("game") or {}
-            name = game.get("name")
-            date_ts = row.get("date")
-            release_id = row.get("id")
-            if not name or not date_ts or not release_id:
-                continue
-            first_release_ts = game.get("first_release_date")
-            if first_release_ts and (date_ts - first_release_ts) > 365 * 86400:
-                continue
-            release_date = datetime.fromtimestamp(date_ts, tz=timezone.utc).date()
-            platform = (row.get("platform") or {}).get("name")
-            cover_url = game.get("cover", {}).get("url") if game.get("cover") else None
-            if cover_url:
-                if cover_url.startswith("//"):
-                    cover_url = "https:" + cover_url
-                cover_url = cover_url.replace("t_thumb", "t_cover_big")
-            game_slug = game.get("slug")
-            summary = game.get("summary")
-            hype = game.get("hypes")
-            alt_names = [a.get("name") for a in (game.get("alternative_names") or []) if a.get("name")]
-            cur.execute(
-                """
-                INSERT INTO game_releases (igdb_release_id, game_name, platform, release_date, cover_url, game_slug, summary, hype, alt_names)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (igdb_release_id) DO UPDATE SET
-                    game_name = EXCLUDED.game_name,
-                    platform = EXCLUDED.platform,
-                    release_date = EXCLUDED.release_date,
-                    cover_url = EXCLUDED.cover_url,
-                    game_slug = EXCLUDED.game_slug,
-                    summary = EXCLUDED.summary,
-                    hype = EXCLUDED.hype,
-                    alt_names = EXCLUDED.alt_names,
-                    fetched_at = now()
-                """,
-                (release_id, name, platform, release_date, cover_url, game_slug, summary, hype, alt_names),
-            )
-            upserted += 1
-    conn.commit()
-    print(f"[ok] release calendar: {upserted} entries upserted")
-
-
 def main():
     conn = psycopg2.connect(DB_URL)
     ensure_schema(conn)
     last_review_score_check = None
-    last_calendar_check = None
     while True:
         print(f"--- ingestion run: {datetime.now(timezone.utc).isoformat()} ---")
         run_once(conn)
@@ -700,19 +591,6 @@ def main():
             last_review_score_check = now
         else:
             print("[skip] review scores: not due yet")
-
-        due_calendar = (
-            last_calendar_check is None
-            or (now - last_calendar_check).total_seconds() >= RELEASE_CALENDAR_INTERVAL_SECONDS
-        )
-        if due_calendar:
-            try:
-                fetch_upcoming_releases(conn)
-            except Exception as e:
-                print(f"[error] release calendar: {e}")
-            last_calendar_check = now
-        else:
-            print("[skip] release calendar: not due yet")
 
         time.sleep(900)
 
