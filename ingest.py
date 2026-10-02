@@ -120,7 +120,7 @@ WALKTHROUGH_PATTERN = re.compile(
 # recurring column.
 RECURRING_THREAD_PATTERN = re.compile(
     r"\b(daily\s+question\s+thread|friend\s+request\s+weekend|"
-    r"what\s*(?:'re|\s+are)\s+(?:you|we(?:\s+all)?)\s+playing|talking\s+point|"
+    r"what\s*(?:'re|\s+are)\s+(?:you|we(?:\s+all)?)\s+playing|"
     r"sunday\s+show\s+off\s+thread|indie\s+sunday\s+hub)\b",
     re.IGNORECASE,
 )
@@ -128,15 +128,24 @@ RECURRING_THREAD_PATTERN = re.compile(
 # real-world variants - "What are WE ALL playing" (not just "you"),
 # r/NintendoSwitch's own "Sunday Show Off Thread", and Rock Paper
 # Shotgun's "Indie Sunday Hub" all slipped through and re-formed the
-# exact same story the first fix had just emptied. Deliberately NOT
-# covering "[Show] Daily LIVE" / "[Show] Podcast LIVE" formats yet -
-# unlike the patterns above, these sometimes carry genuine news as a
-# prefix (e.g. "Intergalactic Reveal Coming 2027... - Kinda Funny Games
-# Daily 09.29.26"), so a blanket exclude would silently drop real
-# coverage along with the zero-content episodes. This family of
-# recurring-template titles is an open-ended, evolving list in
-# practice, not a fixed set - expect to keep extending it as new
-# variants turn up, the same way the stopword list has grown over time.
+# exact same story the first fix had just emptied. Also dropped
+# "talking point" as its own standalone alternative the same day -
+# Pure Xbox uses "Talking Point:" as a general headline prefix for
+# all kinds of discussion pieces, not just their recurring weekly
+# column (found live: "Talking Point: So, Are You Getting The Premium
+# Upgrade For Gears Of War: E-Day?" is a genuine, specific piece that
+# got wrongly excluded). The one originally-observed "Talking Point"
+# case ("...What Are You Playing This Weekend? - Issue 651") is still
+# caught by the "what are you playing" alternative on its own, so
+# nothing is lost by removing the broader, riskier standalone match.
+# Deliberately NOT covering "[Show] Daily LIVE" / "[Show] Podcast
+# LIVE" formats yet - these sometimes carry genuine news as a prefix
+# (e.g. "Intergalactic Reveal Coming 2027... - Kinda Funny Games Daily
+# 09.29.26"), so a blanket exclude would silently drop real coverage
+# along with the zero-content episodes. This family of recurring-
+# template titles is an open-ended, evolving list in practice, not a
+# fixed set - expect to keep extending it as new variants turn up, the
+# same way the stopword list has grown over time.
 
 REVIEW_SCORE_INTERVAL_SECONDS = 3600
 MAX_OPENCRITIC_LOOKUPS_PER_DAY = 10
@@ -334,12 +343,28 @@ def run_once(conn):
 
 
 def cluster_recent_articles(conn):
+    # Fix (2 Oct 2026): the window used to apply unconditionally, so an
+    # article that missed clustering for ANY reason - cap competition,
+    # a since-fixed bug, an outage, simple bad luck in which group it
+    # landed in - aged out of consideration forever once its window
+    # passed, with no way back. Confirmed live: 1,804 articles sat with
+    # no story_id, 1,719 of them (95%) already past the window, the
+    # oldest from 9 Aug 2026 - two months of real coverage silently
+    # invisible, compounding the whole time. Orphans (story_id IS NULL)
+    # are now included regardless of age, so every cycle gives them
+    # another chance; already-excluded content (walkthroughs, recurring
+    # threads) stays excluded regardless, since those flags are checked
+    # independently of this OR. The one real cost is a larger one-time
+    # backlog to process while it drains - after that, the steady-state
+    # orphan count should stay small, since genuinely unique articles
+    # succeed immediately via the singleton-story path and only ones
+    # caught in active cap/room competition linger at all.
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT id, title, story_id
             FROM articles
-            WHERE COALESCE(published_at, fetched_at) > now() - interval '%s days'
+            WHERE (COALESCE(published_at, fetched_at) > now() - interval '%s days' OR story_id IS NULL)
             AND is_walkthrough = FALSE
             AND is_recurring_thread = FALSE
             """
