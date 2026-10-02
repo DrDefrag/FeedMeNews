@@ -120,9 +120,23 @@ WALKTHROUGH_PATTERN = re.compile(
 # recurring column.
 RECURRING_THREAD_PATTERN = re.compile(
     r"\b(daily\s+question\s+thread|friend\s+request\s+weekend|"
-    r"what\s*(?:'re|\s+are)\s+you\s+playing|talking\s+point)\b",
+    r"what\s*(?:'re|\s+are)\s+(?:you|we(?:\s+all)?)\s+playing|talking\s+point|"
+    r"sunday\s+show\s+off\s+thread|indie\s+sunday\s+hub)\b",
     re.IGNORECASE,
 )
+# Note (2 Oct 2026): extended same day after the first version missed
+# real-world variants - "What are WE ALL playing" (not just "you"),
+# r/NintendoSwitch's own "Sunday Show Off Thread", and Rock Paper
+# Shotgun's "Indie Sunday Hub" all slipped through and re-formed the
+# exact same story the first fix had just emptied. Deliberately NOT
+# covering "[Show] Daily LIVE" / "[Show] Podcast LIVE" formats yet -
+# unlike the patterns above, these sometimes carry genuine news as a
+# prefix (e.g. "Intergalactic Reveal Coming 2027... - Kinda Funny Games
+# Daily 09.29.26"), so a blanket exclude would silently drop real
+# coverage along with the zero-content episodes. This family of
+# recurring-template titles is an open-ended, evolving list in
+# practice, not a fixed set - expect to keep extending it as new
+# variants turn up, the same way the stopword list has grown over time.
 
 REVIEW_SCORE_INTERVAL_SECONDS = 3600
 MAX_OPENCRITIC_LOOKUPS_PER_DAY = 10
