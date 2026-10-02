@@ -101,6 +101,29 @@ WALKTHROUGH_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Recurring community-thread exclusion (added 2 Oct 2026, same treatment
+# as walkthroughs above). Found live: a "Daily Question Thread" story
+# had swept together FOUR separate days' worth of r/NintendoSwitch's
+# own recurring thread (09/22-09/25), a "Friend Request Weekend" post,
+# a "what are you playing" thread, and Push Square's own weekly "Talking
+# Point" column - all genuinely different individual posts, wrongly
+# merged into one story. Root cause: these titles are so repetitive and
+# low-information that TF-IDF can't tell separate instances apart - not
+# enough distinguishing vocabulary to avoid false matches across unlike
+# posts, let alone across different days of the SAME recurring thread.
+# Unlike the story-size bug, this isn't about unbounded growth (this one
+# sat under the cap at 28 members) - it's a quality problem with what
+# gets clustered at all, so the fix is the same one already used for
+# walkthroughs: never let this content become a "story" in the first
+# place. Applied regardless of is_video, since the pattern shows up in
+# both plain-text Reddit posts and at least one press outlet's own
+# recurring column.
+RECURRING_THREAD_PATTERN = re.compile(
+    r"\b(daily\s+question\s+thread|friend\s+request\s+weekend|"
+    r"what\s*(?:'re|\s+are)\s+you\s+playing|talking\s+point)\b",
+    re.IGNORECASE,
+)
+
 REVIEW_SCORE_INTERVAL_SECONDS = 3600
 MAX_OPENCRITIC_LOOKUPS_PER_DAY = 10
 
@@ -140,6 +163,7 @@ def ensure_schema(conn):
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;")
         cur.execute("ALTER TABLE articles ADD COLUMN IF NOT EXISTS is_video BOOLEAN NOT NULL DEFAULT FALSE;")
         cur.execute("ALTER TABLE articles ADD COLUMN IF NOT EXISTS is_walkthrough BOOLEAN NOT NULL DEFAULT FALSE;")
+        cur.execute("ALTER TABLE articles ADD COLUMN IF NOT EXISTS is_recurring_thread BOOLEAN NOT NULL DEFAULT FALSE;")
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS is_video BOOLEAN NOT NULL DEFAULT FALSE;")
         cur.execute("ALTER TABLE articles ADD COLUMN IF NOT EXISTS image_url TEXT;")
         cur.execute("ALTER TABLE stories ADD COLUMN IF NOT EXISTS liked_at TIMESTAMPTZ;")
@@ -208,14 +232,15 @@ def extract_image_url(entry):
 
 def upsert_article(conn, source, tier, title, url, summary, published_at, is_video=False, image_url=None):
     is_walkthrough = bool(is_video and WALKTHROUGH_PATTERN.search(title))
+    is_recurring_thread = bool(RECURRING_THREAD_PATTERN.search(title))
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO articles (source, source_tier, title, url, summary, published_at, is_video, is_walkthrough, image_url)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO articles (source, source_tier, title, url, summary, published_at, is_video, is_walkthrough, is_recurring_thread, image_url)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (url) DO NOTHING;
             """,
-            (source, tier, title, url, summary, published_at, is_video, is_walkthrough, image_url),
+            (source, tier, title, url, summary, published_at, is_video, is_walkthrough, is_recurring_thread, image_url),
         )
     conn.commit()
 
@@ -302,6 +327,7 @@ def cluster_recent_articles(conn):
             FROM articles
             WHERE COALESCE(published_at, fetched_at) > now() - interval '%s days'
             AND is_walkthrough = FALSE
+            AND is_recurring_thread = FALSE
             """
             % CLUSTER_WINDOW_DAYS
         )
@@ -380,6 +406,23 @@ def cluster_recent_articles(conn):
         # arbitrarily, so it's simply invisible this cycle and gets a
         # fair, fresh reconsideration next run once the window has moved
         # and unrelated titles have diluted the false similarity chain.
+        # Fix (2 Oct 2026): when a group spans several already-separate
+        # stories for the same long-running saga (a big game's launch
+        # week genuinely produces trailers, previews, news and a review
+        # as distinct real stories, each individually under the cap but
+        # collectively exceeding it when they transitively chain into
+        # one pass's group), truncating by whatever order the database
+        # happens to return rows in could silently and repeatedly starve
+        # out a brand-new article in favour of one that's already settled
+        # somewhere else. Confirmed live: a fresh "Gears of War: E-Day
+        # Review" sat with no story_id for hours, losing out to already-
+        # clustered members of the same group on every single cycle.
+        # Members with no existing story_id are never-clustered and have
+        # nothing to lose by being bumped to next cycle except delay;
+        # members that already have one keep it regardless of whether
+        # they make this cut. So give the never-clustered ones first
+        # claim on whatever room is available.
+        members = sorted(members, key=lambda i: existing_story_ids[i] is not None)
         room = MAX_STORY_SIZE - existing_count
         members = members[:room] if room > 0 else []
         if not members:
